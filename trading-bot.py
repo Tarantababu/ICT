@@ -137,6 +137,30 @@ class ForexSignalBot:
                             entry_price = (fvg['gap_start'] + fvg['gap_end']) / 2
                             stop_loss, take_profit = self.set_stop_loss_and_take_profit(entry_price, fvg, sweep)
 
+                            # Simulate trade exit
+                            exit_price = None
+                            exit_time = None
+                            for j in range(i + 1, len(data_5m)):
+                                future_price = data_5m.iloc[j]
+                                if sweep == "High sweep":  # Short trade
+                                    if future_price['High'] >= stop_loss:
+                                        exit_price = stop_loss
+                                        exit_time = data_5m.index[j]
+                                        break
+                                    elif future_price['Low'] <= take_profit:
+                                        exit_price = take_profit
+                                        exit_time = data_5m.index[j]
+                                        break
+                                else:  # Low sweep, Long trade
+                                    if future_price['Low'] <= stop_loss:
+                                        exit_price = stop_loss
+                                        exit_time = data_5m.index[j]
+                                        break
+                                    elif future_price['High'] >= take_profit:
+                                        exit_price = take_profit
+                                        exit_time = data_5m.index[j]
+                                        break
+
                             self.signals[pair].append({
                                 "time": current_time,
                                 "price": current_price,
@@ -146,12 +170,40 @@ class ForexSignalBot:
                                 "entry_price": entry_price,
                                 "stop_loss": stop_loss,
                                 "take_profit": take_profit,
-                                "direction": "Short" if sweep == "High sweep" else "Long"
+                                "direction": "Short" if sweep == "High sweep" else "Long",
+                                "exit_price": exit_price,
+                                "exit_time": exit_time
                             })
 
     def run(self):
         self.fetch_data()
         self.generate_signals()
+
+def calculate_stats(signals):
+    if not signals:
+        return 0, 0, 0
+
+    wins = 0
+    total_pips = 0
+    pip_value = 0.0001  # Assuming 4 decimal places for forex pairs
+
+    for signal in signals:
+        entry_price = signal['entry_price']
+        exit_price = signal['exit_price'] if signal['exit_price'] is not None else entry_price
+        
+        if signal['direction'] == 'Long':
+            pips = (exit_price - entry_price) / pip_value
+        else:  # Short
+            pips = (entry_price - exit_price) / pip_value
+        
+        total_pips += pips
+        if pips > 0:
+            wins += 1
+
+    win_rate = (wins / len(signals)) * 100
+    avg_pips = total_pips / len(signals)
+
+    return win_rate, avg_pips, len(signals)
 
 def create_chart(pair, data, signals):
     fig = make_subplots(rows=1, cols=1)
@@ -165,25 +217,20 @@ def create_chart(pair, data, signals):
                                  name='Price'))
 
     for signal in signals:
-        # Display high and low sweeps with an orange line
-        fig.add_shape(type="line",
-                      x0=signal['time'], y0=signal['price'],
-                      x1=signal['choch_time'], y1=signal['price'],
-                      line=dict(color="orange", width=2))
-
-        # Display buy signals up arrow green / sell signals down arrow red
-        arrow_color = "green" if signal['direction'] == "Long" else "red"
-        arrow_symbol = "triangle-up" if signal['direction'] == "Long" else "triangle-down"
-        fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['price']],
+        # Entry point
+        fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['entry_price']],
                                  mode='markers',
-                                 marker=dict(symbol=arrow_symbol, size=10, color=arrow_color),
-                                 name=f"{signal['direction']} Signal"))
+                                 marker=dict(symbol='circle', size=8, color='blue'),
+                                 name='Entry'))
 
-        # Display potential trade for the previous signals with a trend line blue from entry to exit
-        fig.add_shape(type="line",
-                      x0=signal['time'], y0=signal['entry_price'],
-                      x1=signal['choch_time'], y1=signal['entry_price'],
-                      line=dict(color="blue", width=2))
+        # Exit point (if available)
+        if signal['exit_price'] is not None and signal['exit_time'] is not None:
+            color = 'green' if (signal['direction'] == 'Long' and signal['exit_price'] > signal['entry_price']) or \
+                               (signal['direction'] == 'Short' and signal['exit_price'] < signal['entry_price']) else 'red'
+            fig.add_trace(go.Scatter(x=[signal['exit_time']], y=[signal['exit_price']],
+                                     mode='markers',
+                                     marker=dict(symbol='circle', size=8, color=color),
+                                     name='Exit'))
 
     fig.update_layout(title=f'{pair} Chart', xaxis_rangeslider_visible=False)
     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # Hide weekends
@@ -208,15 +255,16 @@ def main():
         with st.spinner('Fetching data and generating signals...'):
             bot.run()
 
-        # Display signals
-        st.header('Generated Signals')
+        # Display signal statistics
+        st.header('Signal Statistics')
         for pair in pairs:
             if bot.signals[pair]:
-                st.subheader(f'Signals for {pair}')
-                for signal in bot.signals[pair]:
-                    st.write(f"Time: {signal['time']}, Sweep: {signal['sweep']}, Direction: {signal['direction']}")
-                    st.write(f"Entry Price: {signal['entry_price']:.5f}")
-                    st.write("---")
+                win_rate, avg_pips, total_signals = calculate_stats(bot.signals[pair])
+                st.subheader(f'Statistics for {pair}')
+                st.write(f"Total Signals: {total_signals}")
+                st.write(f"Win Rate: {win_rate:.2f}%")
+                st.write(f"Average Pips: {avg_pips:.2f}")
+                st.write("---")
             else:
                 st.info(f"No signals generated for {pair}")
 
