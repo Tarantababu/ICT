@@ -121,6 +121,7 @@ class ForexSignalBot:
             data_5m = self.data[pair]['5min']
             data_1h = self.data[pair]['60min']
             self.signals[pair] = []
+            signal_count = 1  # Initialize signal counter
 
             for i in range(len(data_5m) - 1):
                 current_time = data_5m.index[i]
@@ -165,6 +166,7 @@ class ForexSignalBot:
                                         break
 
                             self.signals[pair].append({
+                                "signal_number": signal_count,
                                 "time": current_time,
                                 "price": current_price,
                                 "sweep": sweep,
@@ -177,6 +179,7 @@ class ForexSignalBot:
                                 "exit_price": exit_price,
                                 "exit_time": exit_time
                             })
+                            signal_count += 1  # Increment signal counter
 
     def run(self):
         self.fetch_data()
@@ -223,19 +226,23 @@ def create_chart(pair, data, signals):
     for signal in signals:
         # Entry point - blue for buy, orange for sell
         entry_color = 'blue' if signal['direction'] == 'Long' else 'orange'
-        fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['entry_price']],
-                                 mode='markers',
+        fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['price']],
+                                 mode='markers+text',
                                  marker=dict(symbol='circle', size=8, color=entry_color),
-                                 name=f"{signal['direction']} Entry"))
+                                 text=[str(signal['signal_number'])],
+                                 textposition="top center",
+                                 name=f"{signal['direction']} Entry {signal['signal_number']}"))
 
         # Exit point (if available)
         if signal['exit_price'] is not None and signal['exit_time'] is not None:
             exit_color = 'green' if (signal['direction'] == 'Long' and signal['exit_price'] > signal['entry_price']) or \
                                    (signal['direction'] == 'Short' and signal['exit_price'] < signal['entry_price']) else 'red'
             fig.add_trace(go.Scatter(x=[signal['exit_time']], y=[signal['exit_price']],
-                                     mode='markers',
+                                     mode='markers+text',
                                      marker=dict(symbol='circle', size=8, color=exit_color),
-                                     name='Exit'))
+                                     text=[str(signal['signal_number'])],
+                                     textposition="top center",
+                                     name=f"Exit {signal['signal_number']}"))
 
     fig.update_layout(title=f'{pair} Chart', xaxis_rangeslider_visible=False)
     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # Hide weekends
@@ -282,10 +289,19 @@ def main():
                 st.write(f"Total Pips Gained: {total_pips_gained:.2f}")
                 st.write(f"Total Pips Lost: {total_pips_lost:.2f}")
                 st.write(f"Net Pips: {total_pips_gained - total_pips_lost:.2f}")
+                
+                # Display individual signal details
+                st.write("Individual Signal Details:")
+                for signal in bot.signals[pair]:
+                    pips = (signal['exit_price'] - signal['entry_price']) / bot.pip_values[pair] if signal['direction'] == 'Long' else \
+                           (signal['entry_price'] - signal['exit_price']) / bot.pip_values[pair]
+                    st.write(f"Signal {signal['signal_number']}: {signal['direction']} - Entry: {signal['entry_price']:.5f}, "
+                             f"Exit: {signal['exit_price']:.5f}, Pips: {pips:.2f}")
+                
                 st.write("---")
             else:
                 st.info(f"No signals generated for {pair}")
-                
+
         # Display charts
         st.header('Charts')
         for pair in pairs:
