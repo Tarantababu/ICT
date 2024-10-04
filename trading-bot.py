@@ -184,10 +184,11 @@ class ForexSignalBot:
 
 def calculate_stats(signals, pip_value):
     if not signals:
-        return 0, 0, 0
+        return 0, 0, 0, 0
 
     wins = 0
-    total_pips = 0
+    total_pips_gained = 0
+    total_pips_lost = 0
 
     for signal in signals:
         entry_price = signal['entry_price']
@@ -198,14 +199,15 @@ def calculate_stats(signals, pip_value):
         else:  # Short
             pips = (entry_price - exit_price) / pip_value
         
-        total_pips += pips
         if pips > 0:
+            total_pips_gained += pips
             wins += 1
+        else:
+            total_pips_lost += abs(pips)
 
-    win_rate = (wins / len(signals)) * 100
-    avg_pips = total_pips / len(signals)
+    win_rate = (wins / len(signals)) * 100 if signals else 0
 
-    return win_rate, avg_pips, len(signals)
+    return win_rate, total_pips_gained, total_pips_lost, len(signals)
 
 def create_chart(pair, data, signals):
     fig = make_subplots(rows=1, cols=1)
@@ -273,15 +275,17 @@ def main():
         st.header('Signal Statistics')
         for pair in pairs:
             if bot.signals[pair]:
-                win_rate, avg_pips, total_signals = calculate_stats(bot.signals[pair], bot.pip_values[pair])
+                win_rate, total_pips_gained, total_pips_lost, total_signals = calculate_stats(bot.signals[pair], bot.pip_values[pair])
                 st.subheader(f'Statistics for {pair}')
                 st.write(f"Total Signals: {total_signals}")
                 st.write(f"Win Rate: {win_rate:.2f}%")
-                st.write(f"Average Pips: {avg_pips:.2f}")
+                st.write(f"Total Pips Gained: {total_pips_gained:.2f}")
+                st.write(f"Total Pips Lost: {total_pips_lost:.2f}")
+                st.write(f"Net Pips: {total_pips_gained - total_pips_lost:.2f}")
                 st.write("---")
             else:
                 st.info(f"No signals generated for {pair}")
-
+                
         # Display charts
         st.header('Charts')
         for pair in pairs:
