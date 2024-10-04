@@ -8,12 +8,14 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 class ForexSignalBot:
-    def __init__(self, pairs, api_key, sl_pips):
+    def __init__(self, pairs, api_key, sl_pips, pip_values, risk_rewards):
         self.pairs = pairs
         self.data = {pair: {} for pair in pairs}
         self.signals = {pair: [] for pair in pairs}
         self.api_key = api_key
         self.sl_pips = sl_pips
+        self.pip_values = pip_values
+        self.risk_rewards = risk_rewards
 
     def fetch_data(self):
         for pair in self.pairs:
@@ -103,14 +105,15 @@ class ForexSignalBot:
                 }
         return None
 
-    def set_stop_loss_and_take_profit(self, entry_price, fvg, direction):
-        pip_value = 0.0001  # Assuming 4 decimal places for forex pairs
+    def set_stop_loss_and_take_profit(self, pair, entry_price, fvg, direction):
+        pip_value = self.pip_values[pair]
+        risk_reward = self.risk_rewards[pair]
         if direction == "High sweep":  # Short trade
-            stop_loss = entry_price + self.sl_pips * pip_value
-            take_profit = entry_price - self.sl_pips * pip_value * 2  # 1:2 risk-reward ratio
+            stop_loss = entry_price + self.sl_pips[pair] * pip_value
+            take_profit = entry_price - self.sl_pips[pair] * pip_value * risk_reward
         else:  # Low sweep, Long trade
-            stop_loss = entry_price - self.sl_pips * pip_value
-            take_profit = entry_price + self.sl_pips * pip_value * 2  # 1:2 risk-reward ratio
+            stop_loss = entry_price - self.sl_pips[pair] * pip_value
+            take_profit = entry_price + self.sl_pips[pair] * pip_value * risk_reward
         return stop_loss, take_profit
 
     def generate_signals(self):
@@ -135,7 +138,7 @@ class ForexSignalBot:
                         fvg = self.find_fvg(pair, '5min', choch, sweep)
                         if fvg:
                             entry_price = (fvg['gap_start'] + fvg['gap_end']) / 2
-                            stop_loss, take_profit = self.set_stop_loss_and_take_profit(entry_price, fvg, sweep)
+                            stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, sweep)
 
                             # Simulate trade exit
                             exit_price = None
@@ -179,13 +182,12 @@ class ForexSignalBot:
         self.fetch_data()
         self.generate_signals()
 
-def calculate_stats(signals):
+def calculate_stats(signals, pip_value):
     if not signals:
         return 0, 0, 0
 
     wins = 0
     total_pips = 0
-    pip_value = 0.0001  # Assuming 4 decimal places for forex pairs
 
     for signal in signals:
         entry_price = signal['entry_price']
@@ -237,19 +239,30 @@ def create_chart(pair, data, signals):
     return fig
 
 def main():
-    st.title('Simplified Forex Signal Bot')
+    st.title('Advanced Forex Signal Bot')
 
     # Sidebar for user inputs
     st.sidebar.header('Settings')
     api_key = st.sidebar.text_input('Enter your Alpha Vantage API key:', type='password')
     pairs = st.sidebar.multiselect('Select currency pairs:', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD'])
-    sl_pips = st.sidebar.number_input('Set stop loss (in pips):', min_value=1, max_value=100, value=20)
+    
+    # Create dictionaries to store pair-specific settings
+    sl_pips = {}
+    pip_values = {}
+    risk_rewards = {}
+
+    # Input fields for each selected pair
+    for pair in pairs:
+        st.sidebar.subheader(f'Settings for {pair}')
+        sl_pips[pair] = st.sidebar.number_input(f'Stop Loss for {pair} (in pips):', min_value=1, max_value=100, value=20, key=f'sl_{pair}')
+        pip_values[pair] = st.sidebar.number_input(f'Pip Value for {pair}:', min_value=0.0001, max_value=0.01, value=0.0001, format='%f', key=f'pip_{pair}')
+        risk_rewards[pair] = st.sidebar.number_input(f'Risk-Reward Ratio for {pair}:', min_value=1.0, max_value=5.0, value=2.0, key=f'rr_{pair}')
 
     if not api_key:
         st.warning('Please enter your Alpha Vantage API key to proceed.')
         return
 
-    bot = ForexSignalBot(pairs, api_key, sl_pips)
+    bot = ForexSignalBot(pairs, api_key, sl_pips, pip_values, risk_rewards)
 
     if st.button('Generate Signals'):
         with st.spinner('Fetching data and generating signals...'):
@@ -259,7 +272,7 @@ def main():
         st.header('Signal Statistics')
         for pair in pairs:
             if bot.signals[pair]:
-                win_rate, avg_pips, total_signals = calculate_stats(bot.signals[pair])
+                win_rate, avg_pips, total_signals = calculate_stats(bot.signals[pair], bot.pip_values[pair])
                 st.subheader(f'Statistics for {pair}')
                 st.write(f"Total Signals: {total_signals}")
                 st.write(f"Win Rate: {win_rate:.2f}%")
