@@ -267,7 +267,7 @@ def main():
     # Sidebar for user inputs
     st.sidebar.header('Settings')
     api_key = st.sidebar.text_input('Enter your Alpha Vantage API key:', type='password')
-    pairs = st.sidebar.multiselect('Select currency pairs:', ['AUDUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'AUDCAD', 'NZDUSD', 'CADCHF', 'EURCAD', 'GBPAUD', 'AUDJPY'])
+    pairs = st.sidebar.multiselect('Select currency pairs:', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD'])
     
     # Create dictionaries to store pair-specific settings
     sl_pips = {}
@@ -290,6 +290,22 @@ def main():
     if st.button('Generate Signals'):
         with st.spinner('Fetching data and generating signals...'):
             bot.run()
+
+        # Display active signals
+        st.header('Active Signals')
+        active_signals_exist = False
+        for pair in pairs:
+            active_signals = [signal for signal in bot.signals[pair] if signal['exit_price'] is None]
+            if active_signals:
+                active_signals_exist = True
+                for signal in active_signals:
+                    direction = signal['direction']
+                    arrow = "🔼" if direction == "Long" else "🔽"
+                    st.write(f"{pair} - {direction}{arrow} - entry: {signal['entry_price']:.5f}, "
+                             f"sl: {signal['stop_loss']:.5f}, tp: {signal['take_profit']:.5f}")
+        
+        if not active_signals_exist:
+            st.info("No active signals at the moment.")
 
         # Display signal statistics
         st.header('Signal Statistics')
