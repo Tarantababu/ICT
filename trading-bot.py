@@ -219,19 +219,20 @@ def create_chart(pair, data, signals):
                                  name='Price'))
 
     for signal in signals:
-        # Entry point
+        # Entry point - blue for buy, orange for sell
+        entry_color = 'blue' if signal['direction'] == 'Long' else 'orange'
         fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['entry_price']],
                                  mode='markers',
-                                 marker=dict(symbol='circle', size=8, color='blue'),
-                                 name='Entry'))
+                                 marker=dict(symbol='circle', size=8, color=entry_color),
+                                 name=f"{signal['direction']} Entry"))
 
         # Exit point (if available)
         if signal['exit_price'] is not None and signal['exit_time'] is not None:
-            color = 'green' if (signal['direction'] == 'Long' and signal['exit_price'] > signal['entry_price']) or \
-                               (signal['direction'] == 'Short' and signal['exit_price'] < signal['entry_price']) else 'red'
+            exit_color = 'green' if (signal['direction'] == 'Long' and signal['exit_price'] > signal['entry_price']) or \
+                                   (signal['direction'] == 'Short' and signal['exit_price'] < signal['entry_price']) else 'red'
             fig.add_trace(go.Scatter(x=[signal['exit_time']], y=[signal['exit_price']],
                                      mode='markers',
-                                     marker=dict(symbol='circle', size=8, color=color),
+                                     marker=dict(symbol='circle', size=8, color=exit_color),
                                      name='Exit'))
 
     fig.update_layout(title=f'{pair} Chart', xaxis_rangeslider_visible=False)
