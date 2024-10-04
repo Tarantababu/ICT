@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 class ForexSignalBot:
-    def __init__(self, pairs, api_key, sl_pips, pip_values, risk_rewards):
+    def __init__(self, pairs, api_key, sl_pips, pip_values, risk_rewards, max_risk_per_trade):
         self.pairs = pairs
         self.data = {pair: {} for pair in pairs}
         self.signals = {pair: [] for pair in pairs}
@@ -16,6 +16,7 @@ class ForexSignalBot:
         self.sl_pips = sl_pips
         self.pip_values = pip_values
         self.risk_rewards = risk_rewards
+        self.max_risk_per_trade = max_risk_per_trade
 
     def fetch_data(self):
         for pair in self.pairs:
@@ -130,13 +131,32 @@ class ForexSignalBot:
 
         return stop_loss, take_profit
 
+    def detect_trend(self, pair, timeframe, current_time):
+        data = self.data[pair][timeframe]
+        window = 20  # Use 20 periods for trend detection
+        current_index = data.index.get_loc(current_time, method='nearest')
+        if current_index < window:
+            return "No trend"  # Not enough data for trend detection
+        
+        ma_short = data['Close'].rolling(window=window//2).mean()
+        ma_long = data['Close'].rolling(window=window).mean()
+        
+        if ma_short.iloc[current_index] > ma_long.iloc[current_index]:
+            return "Uptrend"
+        elif ma_short.iloc[current_index] < ma_long.iloc[current_index]:
+            return "Downtrend"
+        else:
+            return "No trend"
+
+    def calculate_risk_amount(self, pair, entry_price, stop_loss):
+        return abs(entry_price - stop_loss) / self.pip_values[pair]
+
     def generate_signals(self):
         for pair in self.pairs:
             data_5m = self.data[pair]['5min']
             data_1h = self.data[pair]['60min']
             self.signals[pair] = []
             signal_count = 1
-            entry_prices = set()
             active_trade = False
             cooldown_period = timedelta(hours=1)
             last_trade_time = self.to_datetime(data_5m.index[0]) - cooldown_period
@@ -175,8 +195,8 @@ class ForexSignalBot:
                     
                     continue  # Skip to next iteration if there's an active trade
 
+                # Entry criteria
                 high, low = self.mark_highs_lows(pair, current_time.date())
-
                 current_price = data_5m.iloc[i]['Close']
                 sweep = self.detect_sweep(current_price, high, low)
 
@@ -185,35 +205,36 @@ class ForexSignalBot:
                     if choch:
                         fvg = self.find_fvg(pair, '5min', choch, sweep)
                         if fvg:
-                            # Use the actual candle data for entry price
-                            entry_candle = data_5m.loc[current_time]
-                            entry_price = entry_candle['Close']
-                            
-                            if entry_price in entry_prices:
-                                continue
-                            
-                            entry_prices.add(entry_price)
-                            
-                            direction = "Short" if sweep == "High sweep" else "Long"
-                            stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, direction)
+                            # Additional entry filters
+                            trend = self.detect_trend(pair, '1h', current_time)
+                            if (sweep == "High sweep" and trend == "Downtrend") or (sweep == "Low sweep" and trend == "Uptrend"):
+                                entry_price = data_5m.iloc[i+1]['Open']  # Enter on next candle open
+                                direction = "Short" if sweep == "High sweep" else "Long"
+                                stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, direction)
+                                
+                                # Risk management
+                                risk_amount = self.calculate_risk_amount(pair, entry_price, stop_loss)
+                                if risk_amount > self.max_risk_per_trade:
+                                    continue  # Skip this trade if risk is too high
 
-                            self.signals[pair].append({
-                                "signal_number": signal_count,
-                                "time": current_time,
-                                "price": current_price,
-                                "sweep": sweep,
-                                "choch_time": choch,
-                                "fvg": fvg,
-                                "entry_price": entry_price,
-                                "stop_loss": stop_loss,
-                                "take_profit": take_profit,
-                                "direction": direction,
-                                "exit_price": None,
-                                "exit_time": None
-                            })
-                            signal_count += 1
-                            active_trade = True
-                            last_trade_time = current_time
+                                self.signals[pair].append({
+                                    "signal_number": signal_count,
+                                    "time": current_time,
+                                    "price": current_price,
+                                    "sweep": sweep,
+                                    "choch_time": choch,
+                                    "fvg": fvg,
+                                    "entry_price": entry_price,
+                                    "stop_loss": stop_loss,
+                                    "take_profit": take_profit,
+                                    "direction": direction,
+                                    "exit_price": None,
+                                    "exit_time": None,
+                                    "risk_amount": risk_amount
+                                })
+                                signal_count += 1
+                                active_trade = True
+                                last_trade_time = current_time
 
             # Close any open trade at the end of the period
             if active_trade:
@@ -312,17 +333,16 @@ def create_chart(pair, data, signals):
     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # Hide weekends
     return fig
 
-def calculate_end_capital(signals, initial_capital, risk_per_trade, pip_value):
+def calculate_end_capital(signals, initial_capital, risk_per_trade):
     capital = initial_capital
     for signal in signals:
         if 'pips' not in signal:
             # Calculate pips if not already present
-            signal['pips'] = calculate_pips(signal['entry_price'], signal['exit_price'], signal['direction'], pip_value)
+            signal['pips'] = calculate_pips(signal['entry_price'], signal['exit_price'], signal['direction'], signal['risk_amount'] / (risk_per_trade * capital))
         
         pips = signal['pips']
-        trade_risk = capital * risk_per_trade
-        sl_distance = abs(signal['stop_loss'] - signal['entry_price'])
-        pip_value = trade_risk / sl_distance if sl_distance != 0 else 0
+        risk_amount = min(capital * risk_per_trade, signal['risk_amount'])
+        pip_value = risk_amount / abs(signal['entry_price'] - signal['stop_loss'])
         pnl = pips * pip_value
         capital += pnl
     return capital
@@ -347,7 +367,7 @@ def optimize_parameters(bot, pair, sl_range, rr_range, initial_capital, risk_per
                         bot.pip_values[pair]
                     )
             
-            end_capital = calculate_end_capital(bot.signals[pair], initial_capital, risk_per_trade, bot.pip_values[pair])
+            end_capital = calculate_end_capital(bot.signals[pair], initial_capital, risk_per_trade)
             
             results.append({
                 'SL (pips)': sl_pips,
@@ -377,11 +397,13 @@ def main():
         pip_values[pair] = st.sidebar.number_input(f'Pip Value for {pair}:', min_value=0.0001, max_value=0.01, value=0.0001, format='%f', key=f'pip_{pair}')
         risk_rewards[pair] = st.sidebar.number_input(f'Risk-Reward Ratio for {pair}:', min_value=1.0, max_value=5.0, value=2.0, key=f'rr_{pair}')
 
+    max_risk_per_trade = st.sidebar.number_input('Maximum Risk per Trade (in pips):', min_value=1, max_value=100, value=20)
+
     if not api_key:
         st.warning('Please enter your Alpha Vantage API key to proceed.')
         return
 
-    bot = ForexSignalBot(pairs, api_key, sl_pips, pip_values, risk_rewards)
+    bot = ForexSignalBot(pairs, api_key, sl_pips, pip_values, risk_rewards, max_risk_per_trade)
 
     # Optimization settings
     st.sidebar.header('Optimization Settings')
