@@ -110,7 +110,7 @@ def main():
     pairs = st.sidebar.multiselect('Select currency pairs:', ['AUDUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'AUDCAD', 'NZDUSD', 'CADCHF', 'EURCAD', 'GBPAUD', 'AUDJPY'])
 
     # Range inputs for stop loss and risk-reward ratio
-    sl_pips_range = st.sidebar.slider('Stop Loss Range (in pips):', 10, 100, (20, 50), step=1)
+    sl_pips_range = st.sidebar.slider('Stop Loss Range (in pips):', 0, 100, (20, 50), step=1)
     risk_reward_range = st.sidebar.slider('Risk-Reward Range:', 1.0, 5.0, (2.0, 4.0), step=0.1)
 
     # Pip value input for each selected pair
