@@ -7,17 +7,15 @@ import pytz
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-class ForexSignalOptimizer:
-    def __init__(self, pairs, api_key, sl_pips_range, risk_reward_range, pip_values, initial_capital, risk_per_trade):
+class ForexSignalBot:
+    def __init__(self, pairs, api_key, sl_pips, pip_values, risk_rewards):
         self.pairs = pairs
-        self.api_key = api_key
-        self.sl_pips_range = sl_pips_range
-        self.risk_reward_range = risk_reward_range
-        self.pip_values = pip_values
-        self.initial_capital = initial_capital
-        self.risk_per_trade = risk_per_trade
         self.data = {pair: {} for pair in pairs}
-        self.optimized_results = {pair: [] for pair in pairs}
+        self.signals = {pair: [] for pair in pairs}
+        self.api_key = api_key
+        self.sl_pips = sl_pips
+        self.pip_values = pip_values
+        self.risk_rewards = risk_rewards
 
     def fetch_data(self):
         for pair in self.pairs:
@@ -43,96 +41,401 @@ class ForexSignalOptimizer:
                 except Exception as e:
                     st.error(f"Error fetching data for {pair} at {timeframe} timeframe: {e}")
 
-    def simulate_trade(self, pair, entry_price, sl_pips, risk_reward, pip_value, capital):
-        # Calculate stop loss and take profit prices
-        stop_loss = entry_price - (sl_pips * pip_value)
-        take_profit = entry_price + (sl_pips * risk_reward * pip_value)
+    def mark_highs_lows(self, pair, date):
+        session_start = datetime.combine(date, datetime.min.time()).replace(tzinfo=pytz.timezone('America/New_York'))
+        session_end = (session_start + timedelta(hours=8, minutes=30))
+        session_data = self.data[pair]['60min'].loc[session_start:session_end]
+        return session_data['High'].max(), session_data['Low'].min()
 
-        # Calculate position size based on the percentage risk and stop loss
-        risk_amount = capital * self.risk_per_trade
-        position_size = risk_amount / (sl_pips * pip_value)
+    def detect_sweep(self, price, high, low):
+        if price > high:
+            return "High sweep"
+        elif price < low:
+            return "Low sweep"
+        return None
 
-        # Placeholder for trade outcome
-        # Assume a simple random outcome: 70% chance of hitting take profit, 30% chance of hitting stop loss
-        outcome = np.random.choice(['tp', 'sl'], p=[0.7, 0.3])
+    def detect_market_structure_shift(self, pair, timeframe, start_index, direction):
+        data = self.data[pair][timeframe].loc[start_index:]
+        if direction == "High sweep":
+            high = data['High'].iloc[0]
+            for i in range(1, len(data)):
+                if data['High'].iloc[i] < high:
+                    low = data['Low'].iloc[i]
+                    for j in range(i + 1, len(data)):
+                        if data['Low'].iloc[j] < low:
+                            return data.index[j]
+                elif data['High'].iloc[i] > high:
+                    high = data['High'].iloc[i]
+        elif direction == "Low sweep":
+            low = data['Low'].iloc[0]
+            for i in range(1, len(data)):
+                if data['Low'].iloc[i] > low:
+                    high = data['High'].iloc[i]
+                    for j in range(i + 1, len(data)):
+                        if data['High'].iloc[j] > high:
+                            return data.index[j]
+                elif data['Low'].iloc[i] < low:
+                    low = data['Low'].iloc[i]
+        return None
 
-        if outcome == 'tp':
-            profit = (take_profit - entry_price) * position_size
-            capital += profit
+    def find_fvg(self, pair, timeframe, start_index, direction):
+        data = self.data[pair][timeframe].loc[start_index:]
+        for i in range(len(data) - 2):
+            candle_1 = data.iloc[i]
+            candle_2 = data.iloc[i + 1]
+            candle_3 = data.iloc[i + 2]
+
+            if direction == "High sweep" and candle_1['Low'] > candle_3['High']:
+                return {
+                    "start_time": candle_1.name,
+                    "end_time": candle_3.name,
+                    "gap_start": candle_1['Low'],
+                    "gap_end": candle_3['High'],
+                    "direction": "bearish",
+                    "fvg_high": candle_1['High']
+                }
+            elif direction == "Low sweep" and candle_1['High'] < candle_3['Low']:
+                return {
+                    "start_time": candle_1.name,
+                    "end_time": candle_3.name,
+                    "gap_start": candle_1['High'],
+                    "gap_end": candle_3['Low'],
+                    "direction": "bullish",
+                    "fvg_low": candle_1['Low']
+                }
+        return None
+
+    def set_stop_loss_and_take_profit(self, pair, entry_price, fvg, direction):
+        pip_value = self.pip_values[pair]
+        risk_reward = self.risk_rewards[pair]
+        sl_pips = self.sl_pips[pair]
+
+        if direction == "Short":  # High sweep
+            fvg_high = fvg['fvg_high']
+            stop_loss = fvg_high + (sl_pips * pip_value)  # SL above FVG high
+            take_profit = entry_price - (stop_loss - entry_price) * risk_reward
+        else:  # Long trade (Low sweep)
+            fvg_low = fvg['fvg_low']
+            stop_loss = fvg_low - (sl_pips * pip_value)  # SL below FVG low
+            take_profit = entry_price + (entry_price - stop_loss) * risk_reward
+
+        return stop_loss, take_profit
+
+    def generate_signals(self):
+        for pair in self.pairs:
+            data_5m = self.data[pair]['5min']
+            data_1h = self.data[pair]['60min']
+            self.signals[pair] = []
+            signal_count = 1
+            entry_prices = set()
+
+            for i in range(len(data_5m) - 1):
+                current_time = data_5m.index[i]
+                if current_time.time() < pd.Timestamp("08:30").time() or current_time.time() >= pd.Timestamp("11:00").time():
+                    continue
+
+                high, low = self.mark_highs_lows(pair, current_time.date())
+
+                current_price = data_5m.iloc[i]['Close']
+                sweep = self.detect_sweep(current_price, high, low)
+
+                if sweep:
+                    choch = self.detect_market_structure_shift(pair, '5min', current_time, sweep)
+                    if choch:
+                        fvg = self.find_fvg(pair, '5min', choch, sweep)
+                        if fvg:
+                            # Use the actual candle data for entry price
+                            entry_candle = data_5m.loc[current_time]
+                            entry_price = entry_candle['Close']
+                            
+                            if entry_price in entry_prices:
+                                continue
+                            
+                            entry_prices.add(entry_price)
+                            
+                            direction = "Short" if sweep == "High sweep" else "Long"
+                            stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, direction)
+
+                            # Simulate trade exit
+                            exit_price = None
+                            exit_time = None
+                            for j in range(i + 1, len(data_5m)):
+                                future_candle = data_5m.iloc[j]
+                                if direction == "Short":
+                                    if future_candle['High'] >= stop_loss:
+                                        exit_price = stop_loss
+                                        exit_time = data_5m.index[j]
+                                        break
+                                    elif future_candle['Low'] <= take_profit:
+                                        exit_price = take_profit
+                                        exit_time = data_5m.index[j]
+                                        break
+                                else:  # Long trade
+                                    if future_candle['Low'] <= stop_loss:
+                                        exit_price = stop_loss
+                                        exit_time = data_5m.index[j]
+                                        break
+                                    elif future_candle['High'] >= take_profit:
+                                        exit_price = take_profit
+                                        exit_time = data_5m.index[j]
+                                        break
+
+                            # If no exit was triggered, use the last available price
+                            if exit_price is None:
+                                exit_price = data_5m.iloc[-1]['Close']
+                                exit_time = data_5m.index[-1]
+
+                            self.signals[pair].append({
+                                "signal_number": signal_count,
+                                "time": current_time,
+                                "price": current_price,
+                                "sweep": sweep,
+                                "choch_time": choch,
+                                "fvg": fvg,
+                                "entry_price": entry_price,
+                                "stop_loss": stop_loss,
+                                "take_profit": take_profit,
+                                "direction": direction,
+                                "exit_price": exit_price,
+                                "exit_time": exit_time
+                            })
+                            signal_count += 1
+
+    def calculate_pips(self, entry_price, exit_price, direction, pip_value):
+        if direction == 'Long':
+            return (exit_price - entry_price) / pip_value
+        else:  # Short
+            return (entry_price - exit_price) / pip_value
+
+    def run(self):
+        self.fetch_data()
+        self.generate_signals()
+        
+        # Calculate pips for each signal
+        for pair in self.pairs:
+            for signal in self.signals[pair]:
+                signal['pips'] = self.calculate_pips(
+                    signal['entry_price'],
+                    signal['exit_price'],
+                    signal['direction'],
+                    self.pip_values[pair]
+                )
+
+def calculate_stats(signals, pip_value):
+    if not signals:
+        return 0, 0, 0, 0
+
+    wins = 0
+    total_pips_gained = 0
+    total_pips_lost = 0
+
+    for signal in signals:
+        pips = signal['pips']
+        
+        if pips > 0:
+            total_pips_gained += pips
+            wins += 1
         else:
-            loss = (entry_price - stop_loss) * position_size
-            capital -= loss
+            total_pips_lost += abs(pips)
 
-        return capital
+    win_rate = (wins / len(signals)) * 100 if signals else 0
 
-    def optimize_signals(self):
-        for pair in self.pairs:
-            best_final_capital = self.initial_capital
-            best_sl_pips = None
-            best_risk_reward = None
+    return win_rate, total_pips_gained, total_pips_lost, len(signals)
 
-            for sl_pips in self.sl_pips_range:
-                for risk_reward in self.risk_reward_range:
-                    capital = self.initial_capital
+def create_chart(pair, data, signals):
+    fig = make_subplots(rows=1, cols=1)
 
-                    # Simulate trades across the available data
-                    for i in range(len(self.data[pair]['5min']) - 1):
-                        entry_price = self.data[pair]['5min'].iloc[i]['Close']
-                        capital = self.simulate_trade(
-                            pair, entry_price, sl_pips, risk_reward, self.pip_values[pair], capital)
+    # Candlestick chart
+    fig.add_trace(go.Candlestick(x=data['5min'].index,
+                                 open=data['5min']['Open'],
+                                 high=data['5min']['High'],
+                                 low=data['5min']['Low'],
+                                 close=data['5min']['Close'],
+                                 name='Price'))
 
-                    # Track the best stop loss and risk-reward combo based on final capital
-                    if capital > best_final_capital:
-                        best_final_capital = capital
-                        best_sl_pips = sl_pips
-                        best_risk_reward = risk_reward
+    for signal in signals:
+        # Entry point - blue for buy, orange for sell
+        entry_color = 'blue' if signal['direction'] == 'Long' else 'orange'
+        fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['entry_price']],
+                                 mode='markers+text',
+                                 marker=dict(symbol='circle', size=8, color=entry_color),
+                                 text=[str(signal['signal_number'])],
+                                 textposition="top center",
+                                 name=f"{signal['direction']} Entry {signal['signal_number']}"))
 
-            # Store the best results for this pair
-            self.optimized_results[pair] = {
-                'best_sl_pips': best_sl_pips,
-                'best_risk_reward': best_risk_reward,
-                'final_capital': best_final_capital
-            }
+        # Exit point
+        if signal['exit_time'] is not None:
+            exit_color = 'green' if signal['pips'] > 0 else 'red'
+            fig.add_trace(go.Scatter(x=[signal['exit_time']], y=[signal['exit_price']],
+                                     mode='markers+text',
+                                     marker=dict(symbol='circle', size=8, color=exit_color),
+                                     text=[str(signal['signal_number'])],
+                                     textposition="top center",
+                                     name=f"Exit {signal['signal_number']}"))
 
-    def display_optimized_results(self):
-        for pair in self.pairs:
-            st.subheader(f'Optimized Results for {pair}')
-            st.write(f"Best Stop Loss (pips): {self.optimized_results[pair]['best_sl_pips']}")
-            st.write(f"Best Risk-Reward Ratio: {self.optimized_results[pair]['best_risk_reward']}")
-            st.write(f"Final Capital: {self.optimized_results[pair]['final_capital']:.2f}")
+        # Add stop loss and take profit lines
+        fig.add_trace(go.Scatter(x=[signal['time'], signal['exit_time'] or data['5min'].index[-1]],
+                                 y=[signal['stop_loss'], signal['stop_loss']],
+                                 mode='lines',
+                                 line=dict(color='red', dash='dash'),
+                                 name=f"SL {signal['signal_number']}"))
+        
+        fig.add_trace(go.Scatter(x=[signal['time'], signal['exit_time'] or data['5min'].index[-1]],
+                                 y=[signal['take_profit'], signal['take_profit']],
+                                 mode='lines',
+                                 line=dict(color='green', dash='dash'),
+                                 name=f"TP {signal['signal_number']}"))
+
+    fig.update_layout(title=f'{pair} Chart', xaxis_rangeslider_visible=False)
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # Hide weekends
+    return fig
+
+def calculate_end_capital(signals, initial_capital, risk_per_trade):
+    capital = initial_capital
+    for signal in signals:
+        pips = signal['pips']
+        trade_risk = capital * risk_per_trade
+        pip_value = trade_risk / (signal['stop_loss'] - signal['entry_price'])
+        pnl = pips * pip_value
+        capital += pnl
+    return capital
+
+def optimize_parameters(bot, pair, sl_range, rr_range, initial_capital, risk_per_trade):
+    results = []
+    
+    for sl_pips in sl_range:
+        for risk_reward in rr_range:
+            bot.sl_pips[pair] = sl_pips
+            bot.risk_rewards[pair] = risk_reward
+            
+            bot.generate_signals()
+            
+            end_capital = calculate_end_capital(bot.signals[pair], initial_capital, risk_per_trade)
+            
+            results.append({
+                'SL (pips)': sl_pips,
+                'Risk-Reward': risk_reward,
+                'End Capital': end_capital
+            })
+    
+    return pd.DataFrame(results)
 
 def main():
-    st.title('Forex Signal Optimizer')
+    st.title('Advanced Forex Signal Bot with Optimizer')
 
     # Sidebar for user inputs
     st.sidebar.header('Settings')
     api_key = st.sidebar.text_input('Enter your Alpha Vantage API key:', type='password')
     pairs = st.sidebar.multiselect('Select currency pairs:', ['AUDUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'AUDCAD', 'NZDUSD', 'CADCHF', 'EURCAD', 'GBPAUD', 'AUDJPY'])
-
-    # Range inputs for stop loss and risk-reward ratio
-    sl_pips_range = st.sidebar.slider('Stop Loss Range (in pips):', 0, 100, (20, 50), step=1)
-    risk_reward_range = st.sidebar.slider('Risk-Reward Range:', 1.0, 5.0, (2.0, 4.0), step=0.1)
-
-    # Pip value input for each selected pair
+    
+    # Create dictionaries to store pair-specific settings
+    sl_pips = {}
     pip_values = {}
-    for pair in pairs:
-        pip_values[pair] = st.sidebar.number_input(f'Pip Value for {pair}:', min_value=0.0001, max_value=0.01, value=0.0001, format='%f', key=f'pip_{pair}')
+    risk_rewards = {}
 
-    # Initial capital and risk per trade input
-    initial_capital = st.sidebar.number_input('Initial Capital:', min_value=1000.0, value=10000.0, step=100.0)
-    risk_per_trade = st.sidebar.slider('Risk per Trade (% of capital):', 0.01, 0.05, 0.02, step=0.01)
+    # Input fields for each selected pair
+    for pair in pairs:
+        st.sidebar.subheader(f'Settings for {pair}')
+        sl_pips[pair] = st.sidebar.number_input(f'Stop Loss for {pair} (in pips):', min_value=1, max_value=100, value=20, key=f'sl_{pair}')
+        pip_values[pair] = st.sidebar.number_input(f'Pip Value for {pair}:', min_value=0.0001, max_value=0.01, value=0.0001, format='%f', key=f'pip_{pair}')
+        risk_rewards[pair] = st.sidebar.number_input(f'Risk-Reward Ratio for {pair}:', min_value=1.0, max_value=5.0, value=2.0, key=f'rr_{pair}')
 
     if not api_key:
         st.warning('Please enter your Alpha Vantage API key to proceed.')
         return
 
-    bot = ForexSignalOptimizer(pairs, api_key, range(*sl_pips_range), np.arange(*risk_reward_range, 0.1), pip_values, initial_capital, risk_per_trade)
+    bot = ForexSignalBot(pairs, api_key, sl_pips, pip_values, risk_rewards)
 
-    if st.button('Optimize Signals'):
-        with st.spinner('Fetching data and optimizing signals...'):
-            bot.fetch_data()
-            bot.optimize_signals()
-            bot.display_optimized_results()
+    # Optimization settings
+    st.sidebar.header('Optimization Settings')
+    optimize = st.sidebar.checkbox('Enable Optimization')
+    if optimize:
+        pair_to_optimize = st.sidebar.selectbox('Select pair to optimize:', pairs)
+        initial_capital = st.sidebar.number_input('Initial Capital:', min_value=100, value=10000)
+        risk_per_trade = st.sidebar.slider('Risk per trade (%):', min_value=0.1, max_value=5.0, value=1.0, step=0.1) / 100
+
+        sl_min = st.sidebar.number_input('Minimum Stop Loss (pips):', min_value=5, value=10)
+        sl_max = st.sidebar.number_input('Maximum Stop Loss (pips):', min_value=sl_min + 5, value=50)
+        sl_step = st.sidebar.number_input('Stop Loss Step:', min_value=1, value=5)
+
+        rr_min = st.sidebar.number_input('Minimum Risk-Reward:', min_value=0.5, value=1.0, step=0.1)
+        rr_max = st.sidebar.number_input('Maximum Risk-Reward:', min_value=rr_min + 0.5, value=3.0, step=0.1)
+        rr_step = st.sidebar.number_input('Risk-Reward Step:', min_value=0.1, value=0.2, step=0.1)
+
+    if st.button('Generate Signals' if not optimize else 'Optimize and Generate Signals'):
+        with st.spinner('Fetching data and generating signals...'):
+            bot.run()
+
+        if optimize:
+            st.header('Optimization Results')
+            sl_range = np.arange(sl_min, sl_max + sl_step, sl_step)
+            rr_range = np.arange(rr_min, rr_max + rr_step, rr_step)
+
+            results_df = optimize_parameters(bot, pair_to_optimize, sl_range, rr_range, initial_capital, risk_per_trade)
+
+            st.dataframe(results_df)
+
+            best_result = results_df.loc[results_df['End Capital'].idxmax()]
+            st.success(f"Best parameters found for {pair_to_optimize}:\n"
+                       f"Stop Loss: {best_result['SL (pips)']:.2f} pips\n"
+                       f"Risk-Reward: {best_result['Risk-Reward']:.2f}\n"
+                       f"End Capital: ${best_result['End Capital']:.2f}")
+
+            st.header('Results Visualization')
+            pivot_table = results_df.pivot(index='SL (pips)', columns='Risk-Reward', values='End Capital')
+            fig = go.Figure(data=[go.Surface(z=pivot_table.values, x=pivot_table.columns, y=pivot_table.index)])
+            fig.update_layout(title='Optimization Results', autosize=False, width=800, height=600,
+                              scene=dict(xaxis_title='Risk-Reward', yaxis_title='SL (pips)', zaxis_title='End Capital'))
+            st.plotly_chart(fig)
+
+        # Display active signals
+        st.header('Active Signals')
+        active_signals_exist = False
+        for pair in pairs:
+            active_signals = [signal for signal in bot.signals[pair] if signal['exit_price'] is None]
+            if active_signals:
+                active_signals_exist = True
+                for signal in active_signals:
+                    direction = signal['direction']
+                    arrow = "🔼" if direction == "Long" else "🔽"
+                    st.write(f"{pair} - {direction}{arrow} - entry: {signal['entry_price']:.5f}, "
+                             f"sl: {signal['stop_loss']:.5f}, tp: {signal['take_profit']:.5f}")
+        
+        if not active_signals_exist:
+            st.info("No active signals at the moment.")
+
+        # Display signal statistics
+        st.header('Signal Statistics')
+        for pair in pairs:
+            if bot.signals[pair]:
+                win_rate, total_pips_gained, total_pips_lost, total_signals = calculate_stats(bot.signals[pair], bot.pip_values[pair])
+                st.subheader(f'Statistics for {pair}')
+                st.write(f"Total Signals: {total_signals}")
+                st.write(f"Win Rate: {win_rate:.2f}%")
+                st.write(f"Total Pips Gained: {total_pips_gained:.2f}")
+                st.write(f"Total Pips Lost: {total_pips_lost:.2f}")
+                st.write(f"Net Pips: {total_pips_gained - total_pips_lost:.2f}")
+                
+                # Display individual signal details
+                st.write("Individual Signal Details:")
+                for signal in bot.signals[pair]:
+                    st.write(f"Signal {signal['signal_number']}: {signal['direction']} - "
+                             f"Entry: {signal['entry_price']:.5f}, "
+                             f"Exit: {signal['exit_price']:.5f}, "
+                             f"Pips: {signal['pips']:.2f}")
+                
+                st.write("---")
+            else:
+                st.info(f"No signals generated for {pair}")
+
+        # Display charts
+        st.header('Charts')
+        for pair in pairs:
+            if pair in bot.data:
+                chart = create_chart(pair, bot.data[pair], bot.signals[pair])
+                st.plotly_chart(chart)
+            else:
+                st.warning(f"No data available for {pair}")
 
 if __name__ == "__main__":
     main()
