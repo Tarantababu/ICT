@@ -138,7 +138,13 @@ class ForexSignalBot:
 
         data = self.data[pair][timeframe]
         window = 20  # Use 20 periods for trend detection
-        current_index = data.index.get_loc(current_time, method='nearest')
+
+        # Find the nearest index in the 60-minute data
+        nearest_index = data.index[data.index <= current_time].max()
+        if nearest_index is pd.NaT:
+            return "No trend"  # Return "No trend" if we can't find a suitable index
+
+        current_index = data.index.get_loc(nearest_index)
         if current_index < window:
             return "No trend"  # Not enough data for trend detection
         
@@ -157,8 +163,12 @@ class ForexSignalBot:
 
     def generate_signals(self):
         for pair in self.pairs:
+            if '5min' not in self.data[pair] or '60min' not in self.data[pair]:
+                st.warning(f"Insufficient data for {pair}. Skipping signal generation.")
+                continue
+
             data_5m = self.data[pair]['5min']
-            data_1h = self.data[pair]['60min']  # Changed from '1h' to '60min'
+            data_1h = self.data[pair]['60min']
             self.signals[pair] = []
             signal_count = 1
             active_trade = False
@@ -200,45 +210,49 @@ class ForexSignalBot:
                     continue  # Skip to next iteration if there's an active trade
 
                 # Entry criteria
-                high, low = self.mark_highs_lows(pair, current_time.date())
-                current_price = data_5m.iloc[i]['Close']
-                sweep = self.detect_sweep(current_price, high, low)
+                try:
+                    high, low = self.mark_highs_lows(pair, current_time.date())
+                    current_price = data_5m.iloc[i]['Close']
+                    sweep = self.detect_sweep(current_price, high, low)
 
-                if sweep:
-                    choch = self.detect_market_structure_shift(pair, '5min', current_time, sweep)
-                    if choch:
-                        fvg = self.find_fvg(pair, '5min', choch, sweep)
-                        if fvg:
-                            # Additional entry filters
-                            trend = self.detect_trend(pair, '60min', current_time)  # Changed from '1h' to '60min'
-                            if (sweep == "High sweep" and trend == "Downtrend") or (sweep == "Low sweep" and trend == "Uptrend"):
-                                entry_price = data_5m.iloc[i+1]['Open']  # Enter on next candle open
-                                direction = "Short" if sweep == "High sweep" else "Long"
-                                stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, direction)
-                                
-                                # Risk management
-                                risk_amount = self.calculate_risk_amount(pair, entry_price, stop_loss)
-                                if risk_amount > self.max_risk_per_trade:
-                                    continue  # Skip this trade if risk is too high
+                    if sweep:
+                        choch = self.detect_market_structure_shift(pair, '5min', current_time, sweep)
+                        if choch:
+                            fvg = self.find_fvg(pair, '5min', choch, sweep)
+                            if fvg:
+                                # Additional entry filters
+                                trend = self.detect_trend(pair, '60min', current_time)
+                                if (sweep == "High sweep" and trend == "Downtrend") or (sweep == "Low sweep" and trend == "Uptrend"):
+                                    entry_price = data_5m.iloc[i+1]['Open']  # Enter on next candle open
+                                    direction = "Short" if sweep == "High sweep" else "Long"
+                                    stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, direction)
+                                    
+                                    # Risk management
+                                    risk_amount = self.calculate_risk_amount(pair, entry_price, stop_loss)
+                                    if risk_amount > self.max_risk_per_trade:
+                                        continue  # Skip this trade if risk is too high
 
-                                self.signals[pair].append({
-                                    "signal_number": signal_count,
-                                    "time": current_time,
-                                    "price": current_price,
-                                    "sweep": sweep,
-                                    "choch_time": choch,
-                                    "fvg": fvg,
-                                    "entry_price": entry_price,
-                                    "stop_loss": stop_loss,
-                                    "take_profit": take_profit,
-                                    "direction": direction,
-                                    "exit_price": None,
-                                    "exit_time": None,
-                                    "risk_amount": risk_amount
-                                })
-                                signal_count += 1
-                                active_trade = True
-                                last_trade_time = current_time
+                                    self.signals[pair].append({
+                                        "signal_number": signal_count,
+                                        "time": current_time,
+                                        "price": current_price,
+                                        "sweep": sweep,
+                                        "choch_time": choch,
+                                        "fvg": fvg,
+                                        "entry_price": entry_price,
+                                        "stop_loss": stop_loss,
+                                        "take_profit": take_profit,
+                                        "direction": direction,
+                                        "exit_price": None,
+                                        "exit_time": None,
+                                        "risk_amount": risk_amount
+                                    })
+                                    signal_count += 1
+                                    active_trade = True
+                                    last_trade_time = current_time
+                except KeyError as e:
+                    st.warning(f"Error processing data for {pair} at {current_time}: {e}")
+                    continue
 
             # Close any open trade at the end of the period
             if active_trade:
