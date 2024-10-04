@@ -27,14 +27,15 @@ class ForexSignalBot:
                     r = requests.get(url)
                     r.raise_for_status()
                     data = r.json()
-
+    
                     if f'Time Series FX ({timeframe})' in data:
                         df = pd.DataFrame(data[f'Time Series FX ({timeframe})']).T
                         df.index = pd.to_datetime(df.index)
                         df = df.sort_index()
                         df = df.astype(float)
                         df.columns = ['Open', 'High', 'Low', 'Close']
-                        df.index = df.index.tz_localize('UTC').tz_convert('America/New_York')
+                        # Remove timezone information
+                        df.index = df.index.tz_localize(None)
                         self.data[pair][timeframe] = df
                     else:
                         st.error(f"Failed to fetch data for {pair} at {timeframe} timeframe. Please check your API key and try again.")
