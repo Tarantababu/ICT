@@ -164,37 +164,44 @@ def create_chart(pair, data, signals):
                                  close=data['5min']['Close'],
                                  name='Price'))
 
-    # Add signals to the chart
     for signal in signals:
-        # Sweep
+        # 1. Display high and low sweeps with an orange line
+        fig.add_shape(type="line",
+                      x0=signal['time'], y0=signal['price'],
+                      x1=signal['choch_time'], y1=signal['price'],
+                      line=dict(color="orange", width=2))
+
+        # 2. Display CHOCH with a red dashed line
+        fig.add_shape(type="line",
+                      x0=signal['choch_time'], y0=data['5min'].loc[signal['time'], 'Low'],
+                      x1=signal['choch_time'], y1=data['5min'].loc[signal['time'], 'High'],
+                      line=dict(color="red", width=1, dash="dash"))
+
+        # 3 & 4. Display buy/sell signals with green up arrow / red down arrow
+        arrow_color = "green" if signal['direction'] == "Long" else "red"
+        arrow_symbol = "triangle-up" if signal['direction'] == "Long" else "triangle-down"
         fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['price']],
                                  mode='markers',
-                                 marker=dict(symbol='triangle-down' if signal['sweep'] == 'High sweep' else 'triangle-up',
-                                             size=10,
-                                             color='red' if signal['sweep'] == 'High sweep' else 'green'),
-                                 name=f"{signal['sweep']} at {signal['price']:.5f}"))
+                                 marker=dict(symbol=arrow_symbol, size=10, color=arrow_color),
+                                 name=f"{signal['direction']} Signal"))
 
-        # Change of Character (CHOCH)
-        fig.add_trace(go.Scatter(x=[signal['choch_time']], y=[data['5min'].loc[signal['choch_time'], 'Close']],
-                                 mode='markers',
-                                 marker=dict(symbol='star', size=12, color='purple'),
-                                 name=f"CHOCH at {signal['choch_time']}"))
+        # 5. Display SL with a red dotted line
+        fig.add_shape(type="line",
+                      x0=signal['time'], y0=signal['stop_loss'],
+                      x1=signal['choch_time'], y1=signal['stop_loss'],
+                      line=dict(color="red", width=1, dash="dot"))
 
-        # Fair Value Gap (FVG)
-        fig.add_trace(go.Scatter(x=[signal['fvg']['start_time'], signal['fvg']['end_time']],
-                                 y=[signal['fvg']['gap_start'], signal['fvg']['gap_end']],
-                                 mode='lines',
-                                 line=dict(color='orange', width=2),
-                                 name=f"FVG {signal['fvg']['direction']}"))
+        # 6. Display TP with a green dotted line
+        fig.add_shape(type="line",
+                      x0=signal['time'], y0=signal['take_profit'],
+                      x1=signal['choch_time'], y1=signal['take_profit'],
+                      line=dict(color="green", width=1, dash="dot"))
 
-        # Entry, Stop Loss, and Take Profit
-        fig.add_trace(go.Scatter(x=[signal['time'], signal['time'], signal['time']],
-                                 y=[signal['entry_price'], signal['stop_loss'], signal['take_profit']],
-                                 mode='markers',
-                                 marker=dict(symbol=['circle', 'square', 'diamond'],
-                                             size=[8, 8, 8],
-                                             color=['blue', 'red', 'green']),
-                                 name=f"Entry, SL, TP for {signal['direction']} trade"))
+        # 7. Display potential trade for the previous signals with a blue trend line
+        fig.add_shape(type="line",
+                      x0=signal['time'], y0=signal['entry_price'],
+                      x1=signal['choch_time'], y1=signal['entry_price'],
+                      line=dict(color="blue", width=2))
 
     fig.update_layout(title=f'{pair} Chart', xaxis_rangeslider_visible=False)
     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # Hide weekends
