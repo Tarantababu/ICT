@@ -128,11 +128,41 @@ class ForexSignalBot:
             self.signals[pair] = []
             signal_count = 1
             entry_prices = set()
+            active_trade = False
+            cooldown_period = pd.Timedelta(hours=1)
+            last_trade_time = pd.Timestamp.min
 
             for i in range(len(data_5m) - 1):
                 current_time = data_5m.index[i]
+                
+                # Only consider trading during specific hours
                 if current_time.time() < pd.Timestamp("08:30").time() or current_time.time() >= pd.Timestamp("11:00").time():
                     continue
+                
+                # Enforce cooldown period between trades
+                if current_time - last_trade_time < cooldown_period:
+                    continue
+
+                # Check if there's an active trade
+                if active_trade:
+                    # Check for exit conditions
+                    current_price = data_5m.iloc[i]['Close']
+                    active_signal = self.signals[pair][-1]
+                    
+                    if (active_signal['direction'] == 'Long' and current_price >= active_signal['take_profit']) or \
+                       (active_signal['direction'] == 'Short' and current_price <= active_signal['take_profit']):
+                        active_signal['exit_price'] = active_signal['take_profit']
+                        active_signal['exit_time'] = current_time
+                        active_trade = False
+                        last_trade_time = current_time
+                    elif (active_signal['direction'] == 'Long' and current_price <= active_signal['stop_loss']) or \
+                         (active_signal['direction'] == 'Short' and current_price >= active_signal['stop_loss']):
+                        active_signal['exit_price'] = active_signal['stop_loss']
+                        active_signal['exit_time'] = current_time
+                        active_trade = False
+                        last_trade_time = current_time
+                    
+                    continue  # Skip to next iteration if there's an active trade
 
                 high, low = self.mark_highs_lows(pair, current_time.date())
 
@@ -156,35 +186,6 @@ class ForexSignalBot:
                             direction = "Short" if sweep == "High sweep" else "Long"
                             stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, direction)
 
-                            # Simulate trade exit
-                            exit_price = None
-                            exit_time = None
-                            for j in range(i + 1, len(data_5m)):
-                                future_candle = data_5m.iloc[j]
-                                if direction == "Short":
-                                    if future_candle['High'] >= stop_loss:
-                                        exit_price = stop_loss
-                                        exit_time = data_5m.index[j]
-                                        break
-                                    elif future_candle['Low'] <= take_profit:
-                                        exit_price = take_profit
-                                        exit_time = data_5m.index[j]
-                                        break
-                                else:  # Long trade
-                                    if future_candle['Low'] <= stop_loss:
-                                        exit_price = stop_loss
-                                        exit_time = data_5m.index[j]
-                                        break
-                                    elif future_candle['High'] >= take_profit:
-                                        exit_price = take_profit
-                                        exit_time = data_5m.index[j]
-                                        break
-
-                            # If no exit was triggered, use the last available price
-                            if exit_price is None:
-                                exit_price = data_5m.iloc[-1]['Close']
-                                exit_time = data_5m.index[-1]
-
                             self.signals[pair].append({
                                 "signal_number": signal_count,
                                 "time": current_time,
@@ -196,10 +197,18 @@ class ForexSignalBot:
                                 "stop_loss": stop_loss,
                                 "take_profit": take_profit,
                                 "direction": direction,
-                                "exit_price": exit_price,
-                                "exit_time": exit_time
+                                "exit_price": None,
+                                "exit_time": None
                             })
                             signal_count += 1
+                            active_trade = True
+
+            # Close any open trade at the end of the period
+            if active_trade:
+                active_signal = self.signals[pair][-1]
+                last_price = data_5m.iloc[-1]['Close']
+                active_signal['exit_price'] = last_price
+                active_signal['exit_time'] = data_5m.index[-1]
 
     def calculate_pips(self, entry_price, exit_price, direction, pip_value):
         if direction == 'Long':
