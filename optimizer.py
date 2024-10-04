@@ -122,94 +122,94 @@ class ForexSignalBot:
         return stop_loss, take_profit
 
     def generate_signals(self):
-    for pair in self.pairs:
-        data_5m = self.data[pair]['5min']
-        data_1h = self.data[pair]['60min']
-        self.signals[pair] = []
-        signal_count = 1
-        entry_prices = set()
-        active_trade = False
-        cooldown_period = pd.Timedelta(hours=1)
-        last_trade_time = pd.Timestamp.min.tz_localize('America/New_York')  # Initialize with timezone
-
-        for i in range(len(data_5m) - 1):
-            current_time = data_5m.index[i]
-            
-            # Only consider trading during specific hours
-            if current_time.time() < pd.Timestamp("08:30").time() or current_time.time() >= pd.Timestamp("11:00").time():
-                continue
-            
-            # Enforce cooldown period between trades
-            if (current_time - last_trade_time) < cooldown_period:
-                continue
-
-            # Check if there's an active trade
-            if active_trade:
-                # Check for exit conditions
-                current_price = data_5m.iloc[i]['Close']
-                active_signal = self.signals[pair][-1]
+        for pair in self.pairs:
+            data_5m = self.data[pair]['5min']
+            data_1h = self.data[pair]['60min']
+            self.signals[pair] = []
+            signal_count = 1
+            entry_prices = set()
+            active_trade = False
+            cooldown_period = pd.Timedelta(hours=1)
+            last_trade_time = pd.Timestamp.min.tz_localize('America/New_York')  # Initialize with timezone
+    
+            for i in range(len(data_5m) - 1):
+                current_time = data_5m.index[i]
                 
-                if (active_signal['direction'] == 'Long' and current_price >= active_signal['take_profit']) or \
-                   (active_signal['direction'] == 'Short' and current_price <= active_signal['take_profit']):
-                    active_signal['exit_price'] = active_signal['take_profit']
-                    active_signal['exit_time'] = current_time
-                    active_trade = False
-                    last_trade_time = current_time
-                elif (active_signal['direction'] == 'Long' and current_price <= active_signal['stop_loss']) or \
-                     (active_signal['direction'] == 'Short' and current_price >= active_signal['stop_loss']):
-                    active_signal['exit_price'] = active_signal['stop_loss']
-                    active_signal['exit_time'] = current_time
-                    active_trade = False
-                    last_trade_time = current_time
+                # Only consider trading during specific hours
+                if current_time.time() < pd.Timestamp("08:30").time() or current_time.time() >= pd.Timestamp("11:00").time():
+                    continue
                 
-                continue  # Skip to next iteration if there's an active trade
-
-            high, low = self.mark_highs_lows(pair, current_time.date())
-
-            current_price = data_5m.iloc[i]['Close']
-            sweep = self.detect_sweep(current_price, high, low)
-
-            if sweep:
-                choch = self.detect_market_structure_shift(pair, '5min', current_time, sweep)
-                if choch:
-                    fvg = self.find_fvg(pair, '5min', choch, sweep)
-                    if fvg:
-                        # Use the actual candle data for entry price
-                        entry_candle = data_5m.loc[current_time]
-                        entry_price = entry_candle['Close']
-                        
-                        if entry_price in entry_prices:
-                            continue
-                        
-                        entry_prices.add(entry_price)
-                        
-                        direction = "Short" if sweep == "High sweep" else "Long"
-                        stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, direction)
-
-                        self.signals[pair].append({
-                            "signal_number": signal_count,
-                            "time": current_time,
-                            "price": current_price,
-                            "sweep": sweep,
-                            "choch_time": choch,
-                            "fvg": fvg,
-                            "entry_price": entry_price,
-                            "stop_loss": stop_loss,
-                            "take_profit": take_profit,
-                            "direction": direction,
-                            "exit_price": None,
-                            "exit_time": None
-                        })
-                        signal_count += 1
-                        active_trade = True
+                # Enforce cooldown period between trades
+                if (current_time - last_trade_time) < cooldown_period:
+                    continue
+    
+                # Check if there's an active trade
+                if active_trade:
+                    # Check for exit conditions
+                    current_price = data_5m.iloc[i]['Close']
+                    active_signal = self.signals[pair][-1]
+                    
+                    if (active_signal['direction'] == 'Long' and current_price >= active_signal['take_profit']) or \
+                       (active_signal['direction'] == 'Short' and current_price <= active_signal['take_profit']):
+                        active_signal['exit_price'] = active_signal['take_profit']
+                        active_signal['exit_time'] = current_time
+                        active_trade = False
                         last_trade_time = current_time
-
-        # Close any open trade at the end of the period
-        if active_trade:
-            active_signal = self.signals[pair][-1]
-            last_price = data_5m.iloc[-1]['Close']
-            active_signal['exit_price'] = last_price
-            active_signal['exit_time'] = data_5m.index[-1]
+                    elif (active_signal['direction'] == 'Long' and current_price <= active_signal['stop_loss']) or \
+                         (active_signal['direction'] == 'Short' and current_price >= active_signal['stop_loss']):
+                        active_signal['exit_price'] = active_signal['stop_loss']
+                        active_signal['exit_time'] = current_time
+                        active_trade = False
+                        last_trade_time = current_time
+                    
+                    continue  # Skip to next iteration if there's an active trade
+    
+                high, low = self.mark_highs_lows(pair, current_time.date())
+    
+                current_price = data_5m.iloc[i]['Close']
+                sweep = self.detect_sweep(current_price, high, low)
+    
+                if sweep:
+                    choch = self.detect_market_structure_shift(pair, '5min', current_time, sweep)
+                    if choch:
+                        fvg = self.find_fvg(pair, '5min', choch, sweep)
+                        if fvg:
+                            # Use the actual candle data for entry price
+                            entry_candle = data_5m.loc[current_time]
+                            entry_price = entry_candle['Close']
+                            
+                            if entry_price in entry_prices:
+                                continue
+                            
+                            entry_prices.add(entry_price)
+                            
+                            direction = "Short" if sweep == "High sweep" else "Long"
+                            stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, direction)
+    
+                            self.signals[pair].append({
+                                "signal_number": signal_count,
+                                "time": current_time,
+                                "price": current_price,
+                                "sweep": sweep,
+                                "choch_time": choch,
+                                "fvg": fvg,
+                                "entry_price": entry_price,
+                                "stop_loss": stop_loss,
+                                "take_profit": take_profit,
+                                "direction": direction,
+                                "exit_price": None,
+                                "exit_time": None
+                            })
+                            signal_count += 1
+                            active_trade = True
+                            last_trade_time = current_time
+    
+            # Close any open trade at the end of the period
+            if active_trade:
+                active_signal = self.signals[pair][-1]
+                last_price = data_5m.iloc[-1]['Close']
+                active_signal['exit_price'] = last_price
+                active_signal['exit_time'] = data_5m.index[-1]
 
     def calculate_pips(self, entry_price, exit_price, direction, pip_value):
         if direction == 'Long':
