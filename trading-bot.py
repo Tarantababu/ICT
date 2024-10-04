@@ -117,77 +117,77 @@ class ForexSignalBot:
         return stop_loss, take_profit
 
     def generate_signals(self):
-    for pair in self.pairs:
-        data_5m = self.data[pair]['5min']
-        data_1h = self.data[pair]['60min']
-        self.signals[pair] = []
-        signal_count = 1  # Initialize signal counter
-        entry_prices = set()  # Set to keep track of entry prices
-
-        for i in range(len(data_5m) - 1):
-            current_time = data_5m.index[i]
-            if current_time.time() < pd.Timestamp("08:30").time() or current_time.time() >= pd.Timestamp("11:00").time():
-                continue
-
-            high, low = self.mark_highs_lows(pair, current_time.date())
-
-            current_price = data_5m.iloc[i]['Close']
-            sweep = self.detect_sweep(current_price, high, low)
-
-            if sweep:
-                choch = self.detect_market_structure_shift(pair, '5min', current_time, sweep)
-                if choch:
-                    fvg = self.find_fvg(pair, '5min', choch, sweep)
-                    if fvg:
-                        entry_price = (fvg['gap_start'] + fvg['gap_end']) / 2
-                        
-                        # Check if this entry price has already been used
-                        if entry_price in entry_prices:
-                            continue  # Skip this signal if the entry price is a duplicate
-                        
-                        entry_prices.add(entry_price)  # Add the new entry price to the set
-                        
-                        stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, sweep)
-
-                        # Simulate trade exit
-                        exit_price = None
-                        exit_time = None
-                        for j in range(i + 1, len(data_5m)):
-                            future_price = data_5m.iloc[j]
-                            if sweep == "High sweep":  # Short trade
-                                if future_price['High'] >= stop_loss:
-                                    exit_price = stop_loss
-                                    exit_time = data_5m.index[j]
-                                    break
-                                elif future_price['Low'] <= take_profit:
-                                    exit_price = take_profit
-                                    exit_time = data_5m.index[j]
-                                    break
-                            else:  # Low sweep, Long trade
-                                if future_price['Low'] <= stop_loss:
-                                    exit_price = stop_loss
-                                    exit_time = data_5m.index[j]
-                                    break
-                                elif future_price['High'] >= take_profit:
-                                    exit_price = take_profit
-                                    exit_time = data_5m.index[j]
-                                    break
-
-                        self.signals[pair].append({
-                            "signal_number": signal_count,
-                            "time": current_time,
-                            "price": current_price,
-                            "sweep": sweep,
-                            "choch_time": choch,
-                            "fvg": fvg,
-                            "entry_price": entry_price,
-                            "stop_loss": stop_loss,
-                            "take_profit": take_profit,
-                            "direction": "Short" if sweep == "High sweep" else "Long",
-                            "exit_price": exit_price,
-                            "exit_time": exit_time
-                        })
-                        signal_count += 1  # Increment signal counter
+        for pair in self.pairs:
+            data_5m = self.data[pair]['5min']
+            data_1h = self.data[pair]['60min']
+            self.signals[pair] = []
+            signal_count = 1  # Initialize signal counter
+            entry_prices = set()  # Set to keep track of entry prices
+    
+            for i in range(len(data_5m) - 1):
+                current_time = data_5m.index[i]
+                if current_time.time() < pd.Timestamp("08:30").time() or current_time.time() >= pd.Timestamp("11:00").time():
+                    continue
+    
+                high, low = self.mark_highs_lows(pair, current_time.date())
+    
+                current_price = data_5m.iloc[i]['Close']
+                sweep = self.detect_sweep(current_price, high, low)
+    
+                if sweep:
+                    choch = self.detect_market_structure_shift(pair, '5min', current_time, sweep)
+                    if choch:
+                        fvg = self.find_fvg(pair, '5min', choch, sweep)
+                        if fvg:
+                            entry_price = (fvg['gap_start'] + fvg['gap_end']) / 2
+                            
+                            # Check if this entry price has already been used
+                            if entry_price in entry_prices:
+                                continue  # Skip this signal if the entry price is a duplicate
+                            
+                            entry_prices.add(entry_price)  # Add the new entry price to the set
+                            
+                            stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, sweep)
+    
+                            # Simulate trade exit
+                            exit_price = None
+                            exit_time = None
+                            for j in range(i + 1, len(data_5m)):
+                                future_price = data_5m.iloc[j]
+                                if sweep == "High sweep":  # Short trade
+                                    if future_price['High'] >= stop_loss:
+                                        exit_price = stop_loss
+                                        exit_time = data_5m.index[j]
+                                        break
+                                    elif future_price['Low'] <= take_profit:
+                                        exit_price = take_profit
+                                        exit_time = data_5m.index[j]
+                                        break
+                                else:  # Low sweep, Long trade
+                                    if future_price['Low'] <= stop_loss:
+                                        exit_price = stop_loss
+                                        exit_time = data_5m.index[j]
+                                        break
+                                    elif future_price['High'] >= take_profit:
+                                        exit_price = take_profit
+                                        exit_time = data_5m.index[j]
+                                        break
+    
+                            self.signals[pair].append({
+                                "signal_number": signal_count,
+                                "time": current_time,
+                                "price": current_price,
+                                "sweep": sweep,
+                                "choch_time": choch,
+                                "fvg": fvg,
+                                "entry_price": entry_price,
+                                "stop_loss": stop_loss,
+                                "take_profit": take_profit,
+                                "direction": "Short" if sweep == "High sweep" else "Long",
+                                "exit_price": exit_price,
+                                "exit_time": exit_time
+                            })
+                            signal_count += 1  # Increment signal counter
 
     def run(self):
         self.fetch_data()
