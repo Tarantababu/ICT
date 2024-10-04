@@ -50,10 +50,6 @@ class ForexSignalBot:
         else:
             return pd.to_datetime(timestamp).to_pydatetime()
 
-    def time_difference(self, time1, time2):
-        """Calculate time difference in seconds."""
-        return (self.to_datetime(time1) - self.to_datetime(time2)).total_seconds()
-
     def mark_highs_lows(self, pair, date):
         session_start = datetime.combine(date, datetime.min.time())
         session_end = session_start + timedelta(hours=8, minutes=30)
@@ -144,7 +140,7 @@ class ForexSignalBot:
             active_trade = False
             cooldown_period = timedelta(hours=1)
             last_trade_time = self.to_datetime(data_5m.index[0]) - cooldown_period
-    
+
             for i in range(len(data_5m) - 1):
                 current_time = self.to_datetime(data_5m.index[i])
                 
@@ -157,7 +153,7 @@ class ForexSignalBot:
                 # Enforce cooldown period between trades
                 if (current_time - last_trade_time) < cooldown_period:
                     continue
-    
+
                 # Check if there's an active trade
                 if active_trade:
                     # Check for exit conditions
@@ -178,12 +174,12 @@ class ForexSignalBot:
                         last_trade_time = current_time
                     
                     continue  # Skip to next iteration if there's an active trade
-    
+
                 high, low = self.mark_highs_lows(pair, current_time.date())
-    
+
                 current_price = data_5m.iloc[i]['Close']
                 sweep = self.detect_sweep(current_price, high, low)
-    
+
                 if sweep:
                     choch = self.detect_market_structure_shift(pair, '5min', current_time, sweep)
                     if choch:
@@ -200,7 +196,7 @@ class ForexSignalBot:
                             
                             direction = "Short" if sweep == "High sweep" else "Long"
                             stop_loss, take_profit = self.set_stop_loss_and_take_profit(pair, entry_price, fvg, direction)
-    
+
                             self.signals[pair].append({
                                 "signal_number": signal_count,
                                 "time": current_time,
@@ -218,19 +214,13 @@ class ForexSignalBot:
                             signal_count += 1
                             active_trade = True
                             last_trade_time = current_time
-    
+
             # Close any open trade at the end of the period
             if active_trade:
                 active_signal = self.signals[pair][-1]
                 last_price = data_5m.iloc[-1]['Close']
                 active_signal['exit_price'] = last_price
                 active_signal['exit_time'] = self.to_datetime(data_5m.index[-1])
-
-    def calculate_pips(self, entry_price, exit_price, direction, pip_value):
-        if direction == 'Long':
-            return (exit_price - entry_price) / pip_value
-        else:  # Short
-            return (entry_price - exit_price) / pip_value
 
     def run(self):
         self.fetch_data()
@@ -239,12 +229,19 @@ class ForexSignalBot:
         # Calculate pips for each signal
         for pair in self.pairs:
             for signal in self.signals[pair]:
-                signal['pips'] = self.calculate_pips(
-                    signal['entry_price'],
-                    signal['exit_price'],
-                    signal['direction'],
-                    self.pip_values[pair]
-                )
+                if signal['exit_price'] is not None:
+                    signal['pips'] = calculate_pips(
+                        signal['entry_price'],
+                        signal['exit_price'],
+                        signal['direction'],
+                        self.pip_values[pair]
+                    )
+
+def calculate_pips(entry_price, exit_price, direction, pip_value):
+    if direction == 'Long':
+        return (exit_price - entry_price) / pip_value
+    else:  # Short
+        return (entry_price - exit_price) / pip_value
 
 def calculate_stats(signals, pip_value):
     if not signals:
@@ -315,12 +312,17 @@ def create_chart(pair, data, signals):
     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # Hide weekends
     return fig
 
-def calculate_end_capital(signals, initial_capital, risk_per_trade):
+def calculate_end_capital(signals, initial_capital, risk_per_trade, pip_value):
     capital = initial_capital
     for signal in signals:
+        if 'pips' not in signal:
+            # Calculate pips if not already present
+            signal['pips'] = calculate_pips(signal['entry_price'], signal['exit_price'], signal['direction'], pip_value)
+        
         pips = signal['pips']
         trade_risk = capital * risk_per_trade
-        pip_value = trade_risk / (signal['stop_loss'] - signal['entry_price'])
+        sl_distance = abs(signal['stop_loss'] - signal['entry_price'])
+        pip_value = trade_risk / sl_distance if sl_distance != 0 else 0
         pnl = pips * pip_value
         capital += pnl
     return capital
@@ -335,7 +337,17 @@ def optimize_parameters(bot, pair, sl_range, rr_range, initial_capital, risk_per
             
             bot.generate_signals()
             
-            end_capital = calculate_end_capital(bot.signals[pair], initial_capital, risk_per_trade)
+            # Calculate pips for each signal
+            for signal in bot.signals[pair]:
+                if signal['exit_price'] is not None:
+                    signal['pips'] = calculate_pips(
+                        signal['entry_price'],
+                        signal['exit_price'],
+                        signal['direction'],
+                        bot.pip_values[pair]
+                    )
+            
+            end_capital = calculate_end_capital(bot.signals[pair], initial_capital, risk_per_trade, bot.pip_values[pair])
             
             results.append({
                 'SL (pips)': sl_pips,
