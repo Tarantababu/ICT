@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import pytz
-import time
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -33,7 +32,7 @@ class ForexSignalBot:
                     df = df.astype(float)
                     df.columns = ['Open', 'High', 'Low', 'Close']
                     df.index = df.index.tz_localize('UTC').tz_convert('America/New_York')
-                    self.data[pair] = df.iloc[-100:]  # Keep only the last 100 data points
+                    self.data[pair] = df  # Store all available data
                 else:
                     st.error(f"Failed to fetch data for {pair}. Please check your API key and try again.")
             except Exception as e:
@@ -46,8 +45,8 @@ class ForexSignalBot:
 
         current_price = df['Close'].iloc[-1]
         previous_price = df['Close'].iloc[-2]
-        high = df['High'].max()
-        low = df['Low'].min()
+        high = df['High'].rolling(window=12).max().iloc[-1]  # 1-hour high (12 * 5min)
+        low = df['Low'].rolling(window=12).min().iloc[-1]  # 1-hour low
 
         if current_price > high and previous_price <= high:
             return "High sweep"
@@ -91,7 +90,7 @@ def create_chart(pair, data, signals):
                                  close=data['Close'],
                                  name='Price'))
 
-    # Add signals, SL, and TP to the chart
+    # Add historical and current signals to the chart
     for signal in signals:
         fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['price']],
                                  mode='markers',
@@ -113,6 +112,7 @@ def create_chart(pair, data, signals):
                                  name=f"TP: {signal['take_profit']:.5f}"))
 
     fig.update_layout(title=f'{pair} Chart', xaxis_rangeslider_visible=False)
+    fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # Hide weekends
     return fig
 
 def main():
@@ -121,7 +121,7 @@ def main():
     # Sidebar for user inputs
     st.sidebar.header('Settings')
     api_key = st.sidebar.text_input('Enter your Alpha Vantage API key:', type='password')
-    pairs = st.sidebar.multiselect('Select currency pairs:', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'AUDCAD'])
+    pairs = st.sidebar.multiselect('Select currency pairs:', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'AUDCAD', 'USDCAD'])
     sl_pips = st.sidebar.number_input('Set stop loss (in pips):', min_value=1, max_value=100, value=20)
 
     if not api_key:
