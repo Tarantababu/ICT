@@ -165,19 +165,13 @@ def create_chart(pair, data, signals):
                                  name='Price'))
 
     for signal in signals:
-        # 1. Display high and low sweeps with an orange line
+        # Display high and low sweeps with an orange line
         fig.add_shape(type="line",
                       x0=signal['time'], y0=signal['price'],
                       x1=signal['choch_time'], y1=signal['price'],
                       line=dict(color="orange", width=2))
 
-        # 2. Display CHOCH with a red dashed line
-        fig.add_shape(type="line",
-                      x0=signal['choch_time'], y0=data['5min'].loc[signal['time'], 'Low'],
-                      x1=signal['choch_time'], y1=data['5min'].loc[signal['time'], 'High'],
-                      line=dict(color="red", width=1, dash="dash"))
-
-        # 3 & 4. Display buy/sell signals with green up arrow / red down arrow
+        # Display buy signals up arrow green / sell signals down arrow red
         arrow_color = "green" if signal['direction'] == "Long" else "red"
         arrow_symbol = "triangle-up" if signal['direction'] == "Long" else "triangle-down"
         fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['price']],
@@ -185,19 +179,7 @@ def create_chart(pair, data, signals):
                                  marker=dict(symbol=arrow_symbol, size=10, color=arrow_color),
                                  name=f"{signal['direction']} Signal"))
 
-        # 5. Display SL with a red dotted line
-        fig.add_shape(type="line",
-                      x0=signal['time'], y0=signal['stop_loss'],
-                      x1=signal['choch_time'], y1=signal['stop_loss'],
-                      line=dict(color="red", width=1, dash="dot"))
-
-        # 6. Display TP with a green dotted line
-        fig.add_shape(type="line",
-                      x0=signal['time'], y0=signal['take_profit'],
-                      x1=signal['choch_time'], y1=signal['take_profit'],
-                      line=dict(color="green", width=1, dash="dot"))
-
-        # 7. Display potential trade for the previous signals with a blue trend line
+        # Display potential trade for the previous signals with a trend line blue from entry to exit
         fig.add_shape(type="line",
                       x0=signal['time'], y0=signal['entry_price'],
                       x1=signal['choch_time'], y1=signal['entry_price'],
@@ -208,7 +190,7 @@ def create_chart(pair, data, signals):
     return fig
 
 def main():
-    st.title('Advanced Forex Signal Bot')
+    st.title('Simplified Forex Signal Bot')
 
     # Sidebar for user inputs
     st.sidebar.header('Settings')
@@ -233,8 +215,7 @@ def main():
                 st.subheader(f'Signals for {pair}')
                 for signal in bot.signals[pair]:
                     st.write(f"Time: {signal['time']}, Sweep: {signal['sweep']}, Direction: {signal['direction']}")
-                    st.write(f"Entry Price: {signal['entry_price']:.5f}, Stop Loss: {signal['stop_loss']:.5f}, Take Profit: {signal['take_profit']:.5f}")
-                    st.write(f"CHOCH Time: {signal['choch_time']}, FVG: {signal['fvg']['direction']} ({signal['fvg']['gap_start']:.5f} - {signal['fvg']['gap_end']:.5f})")
+                    st.write(f"Entry Price: {signal['entry_price']:.5f}")
                     st.write("---")
             else:
                 st.info(f"No signals generated for {pair}")
