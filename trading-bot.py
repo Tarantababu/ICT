@@ -239,7 +239,7 @@ def create_chart(pair, data, signals):
     for signal in signals:
         # Entry point - blue for buy, orange for sell
         entry_color = 'blue' if signal['direction'] == 'Long' else 'orange'
-        fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['price']],
+        fig.add_trace(go.Scatter(x=[signal['time']], y=[signal['entry_price']],
                                  mode='markers+text',
                                  marker=dict(symbol='circle', size=8, color=entry_color),
                                  text=[str(signal['signal_number'])],
@@ -256,6 +256,19 @@ def create_chart(pair, data, signals):
                                      text=[str(signal['signal_number'])],
                                      textposition="top center",
                                      name=f"Exit {signal['signal_number']}"))
+
+        # Add stop loss and take profit lines
+        fig.add_trace(go.Scatter(x=[signal['time'], signal['exit_time'] or data['5min'].index[-1]],
+                                 y=[signal['stop_loss'], signal['stop_loss']],
+                                 mode='lines',
+                                 line=dict(color='red', dash='dash'),
+                                 name=f"SL {signal['signal_number']}"))
+        
+        fig.add_trace(go.Scatter(x=[signal['time'], signal['exit_time'] or data['5min'].index[-1]],
+                                 y=[signal['take_profit'], signal['take_profit']],
+                                 mode='lines',
+                                 line=dict(color='green', dash='dash'),
+                                 name=f"TP {signal['signal_number']}"))
 
     fig.update_layout(title=f'{pair} Chart', xaxis_rangeslider_visible=False)
     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # Hide weekends
