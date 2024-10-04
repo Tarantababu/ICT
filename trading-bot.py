@@ -10,7 +10,7 @@ from plotly.subplots import make_subplots
 class ForexSignalBot:
     def __init__(self, pairs, api_key, sl_pips):
         self.pairs = pairs
-        self.data = {pair: {} for pair in pairs}
+        self.data = {pair: pd.DataFrame() for pair in pairs}
         self.signals = {pair: [] for pair in pairs}
         self.api_key = api_key
         self.sl_pips = sl_pips
@@ -32,7 +32,7 @@ class ForexSignalBot:
                     df = df.astype(float)
                     df.columns = ['Open', 'High', 'Low', 'Close']
                     df.index = df.index.tz_localize('UTC').tz_convert('America/New_York')
-                    self.data[pair] = df  # Store all available data
+                    self.data[pair] = df
                 else:
                     st.error(f"Failed to fetch data for {pair}. Please check your API key and try again.")
             except Exception as e:
@@ -40,13 +40,13 @@ class ForexSignalBot:
 
     def detect_signal(self, pair, index):
         df = self.data[pair]
-        if index < 1:
+        if index < 12:  # Need at least 1 hour of data
             return None
 
         current_price = df['Close'].iloc[index]
         previous_price = df['Close'].iloc[index-1]
-        high = df['High'].iloc[max(0, index-11):index+1].max()  # 1-hour high (12 * 5min)
-        low = df['Low'].iloc[max(0, index-11):index+1].min()  # 1-hour low
+        high = df['High'].iloc[index-12:index+1].max()  # 1-hour high (12 * 5min)
+        low = df['Low'].iloc[index-12:index+1].min()  # 1-hour low
 
         if current_price > high and previous_price <= high:
             return "High sweep"
@@ -54,34 +54,48 @@ class ForexSignalBot:
             return "Low sweep"
         return None
 
-    def generate_signals(self):
+    def generate_historical_signals(self):
         for pair in self.pairs:
             df = self.data[pair]
-            self.signals[pair] = []  # Reset signals for this pair
-            for i in range(len(df)):
+            self.signals[pair] = []
+            for i in range(12, len(df)):  # Start from 13th candle (1 hour of data)
                 signal = self.detect_signal(pair, i)
                 if signal:
-                    current_price = df['Close'].iloc[i]
-                    pip_value = 0.0001 if 'JPY' not in pair else 0.01  # Adjust pip value for JPY pairs
-                    sl_pips = self.sl_pips[pair]
-                    if signal == "High sweep":
-                        stop_loss = current_price + sl_pips * pip_value
-                        take_profit = current_price - sl_pips * pip_value * 2
-                    else:  # Low sweep
-                        stop_loss = current_price - sl_pips * pip_value
-                        take_profit = current_price + sl_pips * pip_value * 2
+                    self.add_signal(pair, i, signal)
 
-                    self.signals[pair].append({
-                        "time": df.index[i],
-                        "price": current_price,
-                        "signal": signal,
-                        "stop_loss": stop_loss,
-                        "take_profit": take_profit
-                    })
+    def add_signal(self, pair, index, signal_type):
+        df = self.data[pair]
+        current_price = df['Close'].iloc[index]
+        pip_value = 0.0001 if 'JPY' not in pair else 0.01
+        sl_pips = self.sl_pips[pair]
+        
+        if signal_type == "High sweep":
+            stop_loss = current_price + sl_pips * pip_value
+            take_profit = current_price - sl_pips * pip_value * 2
+        else:  # Low sweep
+            stop_loss = current_price - sl_pips * pip_value
+            take_profit = current_price + sl_pips * pip_value * 2
 
-    def run_real_time(self):
+        self.signals[pair].append({
+            "time": df.index[index],
+            "price": current_price,
+            "signal": signal_type,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit
+        })
+
+    def update_real_time(self):
+        for pair in self.pairs:
+            df = self.data[pair]
+            latest_index = len(df) - 1
+            signal = self.detect_signal(pair, latest_index)
+            if signal:
+                self.add_signal(pair, latest_index, signal)
+
+    def run(self):
         self.fetch_data()
-        self.generate_signals()
+        self.generate_historical_signals()
+        self.update_real_time()
 
 def create_chart(pair, data, signals):
     fig = make_subplots(rows=1, cols=1)
@@ -125,7 +139,7 @@ def main():
     # Sidebar for user inputs
     st.sidebar.header('Settings')
     api_key = st.sidebar.text_input('Enter your Alpha Vantage API key:', type='password')
-    pairs = st.sidebar.multiselect('Select currency pairs:', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'AUDCAD'])
+    pairs = st.sidebar.multiselect('Select currency pairs:', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD'])
     
     # Create a dictionary to store stop loss for each pair
     sl_pips = {}
@@ -140,7 +154,7 @@ def main():
 
     if st.button('Get Signals'):
         with st.spinner('Fetching data and generating signals...'):
-            bot.run_real_time()
+            bot.run()
 
         # Display active signals
         st.header('Active Signals')
@@ -155,11 +169,21 @@ def main():
         # Display charts
         st.header('Charts')
         for pair in pairs:
-            if pair in bot.data:
+            if not bot.data[pair].empty:
                 chart = create_chart(pair, bot.data[pair], bot.signals[pair])
                 st.plotly_chart(chart)
             else:
                 st.warning(f"No data available for {pair}")
+
+        # Display all signals
+        st.header('All Signals')
+        for pair in pairs:
+            if bot.signals[pair]:
+                st.subheader(f'Signals for {pair}')
+                for signal in bot.signals[pair]:
+                    st.write(f"Time: {signal['time']}, Signal: {signal['signal']}, Price: {signal['price']:.5f}")
+            else:
+                st.info(f"No signals generated for {pair}")
 
 if __name__ == "__main__":
     main()
