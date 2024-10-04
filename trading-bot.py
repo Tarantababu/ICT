@@ -38,15 +38,15 @@ class ForexSignalBot:
             except Exception as e:
                 st.error(f"Error fetching data for {pair}: {e}")
 
-    def detect_signal(self, pair):
+    def detect_signal(self, pair, index):
         df = self.data[pair]
-        if len(df) < 2:
+        if index < 1:
             return None
 
-        current_price = df['Close'].iloc[-1]
-        previous_price = df['Close'].iloc[-2]
-        high = df['High'].rolling(window=12).max().iloc[-1]  # 1-hour high (12 * 5min)
-        low = df['Low'].rolling(window=12).min().iloc[-1]  # 1-hour low
+        current_price = df['Close'].iloc[index]
+        previous_price = df['Close'].iloc[index-1]
+        high = df['High'].iloc[max(0, index-11):index+1].max()  # 1-hour high (12 * 5min)
+        low = df['Low'].iloc[max(0, index-11):index+1].min()  # 1-hour low
 
         if current_price > high and previous_price <= high:
             return "High sweep"
@@ -56,24 +56,28 @@ class ForexSignalBot:
 
     def generate_signals(self):
         for pair in self.pairs:
-            signal = self.detect_signal(pair)
-            if signal:
-                current_price = self.data[pair]['Close'].iloc[-1]
-                pip_value = 0.0001  # Assuming 4 decimal places for forex pairs
-                if signal == "High sweep":
-                    stop_loss = current_price + self.sl_pips * pip_value
-                    take_profit = current_price - self.sl_pips * pip_value * 2
-                else:  # Low sweep
-                    stop_loss = current_price - self.sl_pips * pip_value
-                    take_profit = current_price + self.sl_pips * pip_value * 2
+            df = self.data[pair]
+            self.signals[pair] = []  # Reset signals for this pair
+            for i in range(len(df)):
+                signal = self.detect_signal(pair, i)
+                if signal:
+                    current_price = df['Close'].iloc[i]
+                    pip_value = 0.0001 if 'JPY' not in pair else 0.01  # Adjust pip value for JPY pairs
+                    sl_pips = self.sl_pips[pair]
+                    if signal == "High sweep":
+                        stop_loss = current_price + sl_pips * pip_value
+                        take_profit = current_price - sl_pips * pip_value * 2
+                    else:  # Low sweep
+                        stop_loss = current_price - sl_pips * pip_value
+                        take_profit = current_price + sl_pips * pip_value * 2
 
-                self.signals[pair].append({
-                    "time": self.data[pair].index[-1],
-                    "price": current_price,
-                    "signal": signal,
-                    "stop_loss": stop_loss,
-                    "take_profit": take_profit
-                })
+                    self.signals[pair].append({
+                        "time": df.index[i],
+                        "price": current_price,
+                        "signal": signal,
+                        "stop_loss": stop_loss,
+                        "take_profit": take_profit
+                    })
 
     def run_real_time(self):
         self.fetch_data()
@@ -121,8 +125,12 @@ def main():
     # Sidebar for user inputs
     st.sidebar.header('Settings')
     api_key = st.sidebar.text_input('Enter your Alpha Vantage API key:', type='password')
-    pairs = st.sidebar.multiselect('Select currency pairs:', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'AUDCAD', 'USDCAD'])
-    sl_pips = st.sidebar.number_input('Set stop loss (in pips):', min_value=1, max_value=100, value=20)
+    pairs = st.sidebar.multiselect('Select currency pairs:', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'AUDCAD'])
+    
+    # Create a dictionary to store stop loss for each pair
+    sl_pips = {}
+    for pair in pairs:
+        sl_pips[pair] = st.sidebar.number_input(f'Set stop loss for {pair} (in pips):', min_value=1, max_value=100, value=20, key=pair)
 
     if not api_key:
         st.warning('Please enter your Alpha Vantage API key to proceed.')
