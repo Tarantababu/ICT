@@ -293,10 +293,14 @@ def main():
                 # Display individual signal details
                 st.write("Individual Signal Details:")
                 for signal in bot.signals[pair]:
-                    pips = (signal['exit_price'] - signal['entry_price']) / bot.pip_values[pair] if signal['direction'] == 'Long' else \
-                           (signal['entry_price'] - signal['exit_price']) / bot.pip_values[pair]
-                    st.write(f"Signal {signal['signal_number']}: {signal['direction']} - Entry: {signal['entry_price']:.5f}, "
-                             f"Exit: {signal['exit_price']:.5f}, Pips: {pips:.2f}")
+                    if signal['exit_price'] is not None:
+                        pips = (signal['exit_price'] - signal['entry_price']) / bot.pip_values[pair] if signal['direction'] == 'Long' else \
+                               (signal['entry_price'] - signal['exit_price']) / bot.pip_values[pair]
+                        st.write(f"Signal {signal['signal_number']}: {signal['direction']} - Entry: {signal['entry_price']:.5f}, "
+                                 f"Exit: {signal['exit_price']:.5f}, Pips: {pips:.2f}")
+                    else:
+                        st.write(f"Signal {signal['signal_number']}: {signal['direction']} - Entry: {signal['entry_price']:.5f}, "
+                                 f"Exit: Not yet executed")
                 
                 st.write("---")
             else:
