@@ -132,6 +132,10 @@ class ForexSignalBot:
         return stop_loss, take_profit
 
     def detect_trend(self, pair, timeframe, current_time):
+        timeframe = '60min' if timeframe == '1h' else timeframe  # Convert '1h' to '60min'
+        if timeframe not in self.data[pair]:
+            return "No trend"  # Return "No trend" if the timeframe data is not available
+
         data = self.data[pair][timeframe]
         window = 20  # Use 20 periods for trend detection
         current_index = data.index.get_loc(current_time, method='nearest')
@@ -154,7 +158,7 @@ class ForexSignalBot:
     def generate_signals(self):
         for pair in self.pairs:
             data_5m = self.data[pair]['5min']
-            data_1h = self.data[pair]['60min']
+            data_1h = self.data[pair]['60min']  # Changed from '1h' to '60min'
             self.signals[pair] = []
             signal_count = 1
             active_trade = False
@@ -206,7 +210,7 @@ class ForexSignalBot:
                         fvg = self.find_fvg(pair, '5min', choch, sweep)
                         if fvg:
                             # Additional entry filters
-                            trend = self.detect_trend(pair, '1h', current_time)
+                            trend = self.detect_trend(pair, '60min', current_time)  # Changed from '1h' to '60min'
                             if (sweep == "High sweep" and trend == "Downtrend") or (sweep == "Low sweep" and trend == "Uptrend"):
                                 entry_price = data_5m.iloc[i+1]['Open']  # Enter on next candle open
                                 direction = "Short" if sweep == "High sweep" else "Long"
