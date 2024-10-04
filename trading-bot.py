@@ -144,7 +144,9 @@ class ForexSignalBot:
                     if choch:
                         fvg = self.find_fvg(pair, '5min', choch, sweep)
                         if fvg:
-                            entry_price = (fvg['gap_start'] + fvg['gap_end']) / 2
+                            # Use the actual candle data for entry price
+                            entry_candle = data_5m.loc[current_time]
+                            entry_price = entry_candle['Close']
                             
                             if entry_price in entry_prices:
                                 continue
@@ -158,25 +160,30 @@ class ForexSignalBot:
                             exit_price = None
                             exit_time = None
                             for j in range(i + 1, len(data_5m)):
-                                future_price = data_5m.iloc[j]
+                                future_candle = data_5m.iloc[j]
                                 if direction == "Short":
-                                    if future_price['High'] >= stop_loss:
+                                    if future_candle['High'] >= stop_loss:
                                         exit_price = stop_loss
                                         exit_time = data_5m.index[j]
                                         break
-                                    elif future_price['Low'] <= take_profit:
+                                    elif future_candle['Low'] <= take_profit:
                                         exit_price = take_profit
                                         exit_time = data_5m.index[j]
                                         break
                                 else:  # Long trade
-                                    if future_price['Low'] <= stop_loss:
+                                    if future_candle['Low'] <= stop_loss:
                                         exit_price = stop_loss
                                         exit_time = data_5m.index[j]
                                         break
-                                    elif future_price['High'] >= take_profit:
+                                    elif future_candle['High'] >= take_profit:
                                         exit_price = take_profit
                                         exit_time = data_5m.index[j]
                                         break
+
+                            # If no exit was triggered, use the last available price
+                            if exit_price is None:
+                                exit_price = data_5m.iloc[-1]['Close']
+                                exit_time = data_5m.index[-1]
 
                             self.signals[pair].append({
                                 "signal_number": signal_count,
@@ -194,9 +201,25 @@ class ForexSignalBot:
                             })
                             signal_count += 1
 
+    def calculate_pips(self, entry_price, exit_price, direction, pip_value):
+        if direction == 'Long':
+            return (exit_price - entry_price) / pip_value
+        else:  # Short
+            return (entry_price - exit_price) / pip_value
+
     def run(self):
         self.fetch_data()
         self.generate_signals()
+        
+        # Calculate pips for each signal
+        for pair in self.pairs:
+            for signal in self.signals[pair]:
+                signal['pips'] = self.calculate_pips(
+                    signal['entry_price'],
+                    signal['exit_price'],
+                    signal['direction'],
+                    self.pip_values[pair]
+                )
 
 def calculate_stats(signals, pip_value):
     if not signals:
@@ -207,13 +230,7 @@ def calculate_stats(signals, pip_value):
     total_pips_lost = 0
 
     for signal in signals:
-        entry_price = signal['entry_price']
-        exit_price = signal['exit_price'] if signal['exit_price'] is not None else entry_price
-        
-        if signal['direction'] == 'Long':
-            pips = (exit_price - entry_price) / pip_value
-        else:  # Short
-            pips = (entry_price - exit_price) / pip_value
+        pips = signal['pips']
         
         if pips > 0:
             total_pips_gained += pips
@@ -246,10 +263,9 @@ def create_chart(pair, data, signals):
                                  textposition="top center",
                                  name=f"{signal['direction']} Entry {signal['signal_number']}"))
 
-        # Exit point (if available)
-        if signal['exit_price'] is not None and signal['exit_time'] is not None:
-            exit_color = 'green' if (signal['direction'] == 'Long' and signal['exit_price'] > signal['entry_price']) or \
-                                   (signal['direction'] == 'Short' and signal['exit_price'] < signal['entry_price']) else 'red'
+        # Exit point
+        if signal['exit_time'] is not None:
+            exit_color = 'green' if signal['pips'] > 0 else 'red'
             fig.add_trace(go.Scatter(x=[signal['exit_time']], y=[signal['exit_price']],
                                      mode='markers+text',
                                      marker=dict(symbol='circle', size=8, color=exit_color),
@@ -280,7 +296,7 @@ def main():
     # Sidebar for user inputs
     st.sidebar.header('Settings')
     api_key = st.sidebar.text_input('Enter your Alpha Vantage API key:', type='password')
-    pairs = st.sidebar.multiselect('Select currency pairs:', ['AUDUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCAD', 'AUDCAD', 'NZDUSD', 'CADCHF', 'EURCAD', 'GBPAUD', 'AUDJPY'])
+    pairs = st.sidebar.multiselect('Select currency pairs:', ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD'])
     
     # Create dictionaries to store pair-specific settings
     sl_pips = {}
@@ -335,14 +351,10 @@ def main():
                 # Display individual signal details
                 st.write("Individual Signal Details:")
                 for signal in bot.signals[pair]:
-                    if signal['exit_price'] is not None:
-                        pips = (signal['exit_price'] - signal['entry_price']) / bot.pip_values[pair] if signal['direction'] == 'Long' else \
-                               (signal['entry_price'] - signal['exit_price']) / bot.pip_values[pair]
-                        st.write(f"Signal {signal['signal_number']}: {signal['direction']} - Entry: {signal['entry_price']:.5f}, "
-                                 f"Exit: {signal['exit_price']:.5f}, Pips: {pips:.2f}")
-                    else:
-                        st.write(f"Signal {signal['signal_number']}: {signal['direction']} - Entry: {signal['entry_price']:.5f}, "
-                                 f"Exit: Not yet executed")
+                    st.write(f"Signal {signal['signal_number']}: {signal['direction']} - "
+                             f"Entry: {signal['entry_price']:.5f}, "
+                             f"Exit: {signal['exit_price']:.5f}, "
+                             f"Pips: {signal['pips']:.2f}")
                 
                 st.write("---")
             else:
